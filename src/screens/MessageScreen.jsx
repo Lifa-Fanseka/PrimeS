@@ -1,885 +1,2231 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from 'react';
+
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
   FlatList,
-  ScrollView,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
-  Animated,
-  Dimensions,
-  SafeAreaView,
   Alert,
+  ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
+
 import { Feather } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+import {
+  useFonts,
+  DMSans_400Regular,
+  DMSans_500Medium,
+  DMSans_700Bold,
+} from '@expo-google-fonts/dm-sans';
 
-const CONTACTS_EXPANDED_WIDTH = 130;
-const CONTACTS_COLLAPSED_WIDTH = 52;
+import api from '../api/client';
+import {
+  addMessageListener,
+  addReadListener,
+  sendChatMessage,
+  markThreadAsRead,
+  checkOnline,
+  isChatConnected,
+} from '../api/chat';
+
+/* =========================================================
+   COLORS
+========================================================= */
 
 const COLORS = {
-  cyan: '#06B6D4',
-  cyanDark: '#0891B2',
-  cyanLight: '#ECFEFF',
-  cyanBorder: '#CFFAFE',
-  cyanMessage: '#06B6D4',
-  black: '#000000',
+  blue: '#2563EB',
+  black: '#111111',
   white: '#FFFFFF',
-  gray50: '#F9FAFB',
+
+  backdrop: '#F4F4F2',
+
   gray100: '#F3F4F6',
-  gray200: '#E5E7EB',
   gray300: '#D1D5DB',
   gray400: '#9CA3AF',
   gray500: '#6B7280',
-  gray600: '#4B5563',
-  gray700: '#374151',
-  gray800: '#1F2937',
-  green: '#22C55E',
-  red: '#EF4444',
 };
 
-const conversations = [
-  {
-    id: '1',
-    name: 'Coach Martinez',
-    avatar: 'C',
-    avatarColor: '#06B6D4',
-    lastMessage: 'Great performance last week!',
-    time: '2m',
-    unread: true,
-    unreadCount: 2,
-    role: 'Coach',
-    active: true,
-  },
-  {
-    id: '2',
-    name: 'Scout Johnson',
-    avatar: 'S',
-    avatarColor: '#3B82F6',
-    lastMessage: 'Can we schedule a call?',
-    time: '1h',
-    unread: false,
-    unreadCount: 0,
-    role: 'Scout',
-    active: false,
-  },
-  {
-    id: '3',
-    name: 'Team Manager',
-    avatar: 'T',
-    avatarColor: '#8B5CF6',
-    lastMessage: 'Training at 3pm tomorrow',
-    time: '3h',
-    unread: false,
-    unreadCount: 0,
-    role: 'Manager',
-    active: false,
-  },
-  {
-    id: '4',
-    name: 'Recruiter Davis',
-    avatar: 'R',
-    avatarColor: '#F59E0B',
-    lastMessage: 'Interested in your profile',
-    time: '1d',
-    unread: true,
-    unreadCount: 1,
-    role: 'Recruiter',
-    active: false,
-  },
+/* =========================================================
+   AVATAR COLORS
+========================================================= */
+
+const AVATAR_PALETTE = [
+  '#2563EB',
+  '#7C3AED',
+  '#059669',
+  '#D97706',
+  '#DB2777',
 ];
 
-const initialMessages = {
-  '1': [
+function avatarColorFor(id) {
+  const numericId = Number(id) || 0;
+
+  return AVATAR_PALETTE[
+    Math.abs(numericId) % AVATAR_PALETTE.length
+  ];
+}
+
+/* =========================================================
+   TIME HELPERS
+========================================================= */
+
+/*
+ * The backend sends dateSent without an explicit timezone marker
+ * (no trailing "Z" or "+HH:MM" offset). JavaScript's Date parser
+ * treats a string like that as LOCAL time, not UTC — so every
+ * timestamp silently shifts by the device's UTC offset. That's
+ * exactly why a message sent "just now" was showing as "2h" in
+ * the conversation list for anyone outside UTC (e.g. South Africa,
+ * UTC+2): the parsed instant ends up ~2 hours in the past.
+ *
+ * Fix: if the string has no timezone info, treat it as UTC by
+ * appending "Z" before parsing. Every place that parses a raw
+ * server timestamp goes through this function instead of calling
+ * `new Date(...)` directly.
+ */
+function toUtcDate(dateString) {
+  if (!dateString) return null;
+  const hasTimezone = /Z$|[+-]\d{2}:?\d{2}$/.test(dateString);
+  return new Date(hasTimezone ? dateString : `${dateString}Z`);
+}
+
+function formatShortTime(dateString) {
+  if (!dateString) return '';
+
+  const diffMs =
+    Date.now() -
+    toUtcDate(dateString).getTime();
+
+  const mins = Math.floor(
+    diffMs / 60000
+  );
+
+  if (mins < 1) return 'now';
+
+  if (mins < 60) {
+    return `${mins}m`;
+  }
+
+  const hours = Math.floor(
+    mins / 60
+  );
+
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+
+  return `${Math.floor(hours / 24)}d`;
+}
+
+function formatBubbleTime(dateString) {
+  if (!dateString) return '';
+
+  return toUtcDate(dateString).toLocaleTimeString(
+    'en-US',
     {
-      id: '1',
-      text: 'Hey! I saw your performance in the match yesterday. Really impressive!',
-      sent: false,
-      time: '10:30 AM',
-    },
-    {
-      id: '2',
-      text: "Thanks! I've been working hard on my game.",
-      sent: true,
-      time: '10:32 AM',
-    },
-    {
-      id: '3',
-      text: 'It shows! Keep up the good work. When are you available for a discussion about future opportunities?',
-      sent: false,
-      time: '10:35 AM',
-    },
-    {
-      id: '4',
-      text: 'That sounds great! When are you available?',
-      sent: true,
-      time: '10:36 AM',
-    },
-  ],
-  '2': [
-    {
-      id: '1',
-      text: "Hi! I've been following your stats this season.",
-      sent: false,
-      time: '9:00 AM',
-    },
-    {
-      id: '2',
-      text: 'Oh wow, thank you for reaching out!',
-      sent: true,
-      time: '9:05 AM',
-    },
-    {
-      id: '3',
-      text: 'Can we schedule a call to discuss some opportunities?',
-      sent: false,
-      time: '9:10 AM',
-    },
-  ],
-  '3': [
-    {
-      id: '1',
-      text: "Training at 3pm tomorrow, don't forget!",
-      sent: false,
-      time: 'Yesterday',
-    },
-    {
-      id: '2',
-      text: "Got it, I'll be there!",
-      sent: true,
-      time: 'Yesterday',
-    },
-  ],
-  '4': [
-    {
-      id: '1',
-      text: "Hello! I came across your profile and I'm very interested.",
-      sent: false,
-      time: 'Mon',
-    },
-    {
-      id: '2',
-      text: "Thank you, I'd love to hear more.",
-      sent: true,
-      time: 'Mon',
-    },
-    {
-      id: '3',
-      text: "Let's connect properly.",
-      sent: false,
-      time: 'Mon',
-    },
-  ],
-};
-
-export default function MessagesScreen({ navigation }) {
-  const contactsWidth = useRef(
-    new Animated.Value(CONTACTS_EXPANDED_WIDTH)
-  ).current;
-
-  const flatListRef = useRef(null);
-
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const [selectedConversationId, setSelectedConversationId] = useState('1');
-  const [messageInput, setMessageInput] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [allMessages, setAllMessages] = useState({ ...initialMessages });
-
-  const selectedConversation = useMemo(() => {
-    return conversations.find((c) => c.id === selectedConversationId);
-  }, [selectedConversationId]);
-
-  const filteredConversations = useMemo(() => {
-    return conversations.filter((c) =>
-      c.name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [searchQuery]);
-
-  const bubbleMaxWidth =
-    SCREEN_WIDTH -
-    (isCollapsed ? CONTACTS_COLLAPSED_WIDTH : CONTACTS_EXPANDED_WIDTH) -
-    54;
-
-  useEffect(() => {
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: false });
-    }, 100);
-  }, [selectedConversationId]);
-
-  const toggleContacts = () => {
-    const nextCollapsed = !isCollapsed;
-    const toValue = nextCollapsed
-      ? CONTACTS_COLLAPSED_WIDTH
-      : CONTACTS_EXPANDED_WIDTH;
-
-    Animated.timing(contactsWidth, {
-      toValue,
-      duration: 280,
-      useNativeDriver: false,
-    }).start();
-
-    setIsCollapsed(nextCollapsed);
-  };
-
-  const handleSend = () => {
-    if (!messageInput.trim()) return;
-
-    const conversationId = selectedConversationId;
-
-    const newMsg = {
-      id: Date.now().toString(),
-      text: messageInput.trim(),
-      sent: true,
-      time: new Date().toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      }),
-    };
-
-    setAllMessages((prev) => ({
-      ...prev,
-      [conversationId]: [...(prev[conversationId] || []), newMsg],
-    }));
-
-    setMessageInput('');
-
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-
-    setTimeout(() => {
-      const reply = {
-        id: (Date.now() + 1).toString(),
-        text: "Thanks for your message! I'll get back to you soon.",
-        sent: false,
-        time: new Date().toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-        }),
-      };
-
-      setAllMessages((prev) => ({
-        ...prev,
-        [conversationId]: [...(prev[conversationId] || []), reply],
-      }));
-
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
-    }, 2000);
-  };
-
-  const renderMessage = ({ item }) => {
-    return (
-      <View
-        style={[
-          styles.messageRow,
-          { justifyContent: item.sent ? 'flex-end' : 'flex-start' },
-        ]}
-      >
-        <View
-          style={[
-            styles.messageBubble,
-            item.sent ? styles.sentBubble : styles.receivedBubble,
-            { maxWidth: bubbleMaxWidth },
-          ]}
-        >
-          <Text
-            style={[
-              styles.messageText,
-              item.sent ? styles.sentMessageText : styles.receivedMessageText,
-            ]}
-          >
-            {item.text}
-          </Text>
-
-          <Text
-            style={[
-              styles.messageTime,
-              item.sent ? styles.sentTime : styles.receivedTime,
-            ]}
-          >
-            {item.time}
-          </Text>
-        </View>
-      </View>
-    );
-  };
-
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
-      >
-        {/* TOP HEADER */}
-        <View style={styles.topHeader}>
-          <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.topIconButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Feather name="arrow-left" size={20} color={COLORS.gray700} />
-          </TouchableOpacity>
-
-          <Text style={styles.topTitle}>Messages</Text>
-
-          <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.topIconButton}
-            onPress={() => Alert.alert('Settings', 'Settings screen coming soon.')}
-          >
-            <Feather name="settings" size={18} color={COLORS.gray600} />
-          </TouchableOpacity>
-        </View>
-
-        {/* BODY */}
-        <View style={styles.body}>
-          {/* CONTACTS PANEL */}
-          <Animated.View
-            style={[styles.contactsPanel, { width: contactsWidth }]}
-          >
-            <View
-              style={[
-                styles.contactsTopRow,
-                isCollapsed && styles.contactsTopRowCollapsed,
-              ]}
-            >
-              {!isCollapsed && (
-                <View style={styles.contactSearchWrapper}>
-                  <Feather
-                    name="search"
-                    size={10}
-                    color={COLORS.gray400}
-                    style={styles.contactSearchIcon}
-                  />
-
-                  <TextInput
-                    style={styles.contactSearchInput}
-                    placeholder="Search"
-                    placeholderTextColor={COLORS.gray400}
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                  />
-                </View>
-              )}
-
-              <TouchableOpacity
-                activeOpacity={0.75}
-                style={styles.collapseButton}
-                onPress={toggleContacts}
-              >
-                <Feather
-                  name={isCollapsed ? 'chevron-right' : 'chevron-left'}
-                  size={16}
-                  color={COLORS.gray500}
-                />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.contactsScroll}>
-              {filteredConversations.map((conv) => {
-                const selected = conv.id === selectedConversationId;
-                const firstName = conv.name.split(' ')[0];
-
-                return (
-                  <TouchableOpacity
-                    key={conv.id}
-                    activeOpacity={0.75}
-                    style={[
-                      styles.contactRow,
-                      selected && styles.contactRowSelected,
-                    ]}
-                    onPress={() => setSelectedConversationId(conv.id)}
-                  >
-                    <View style={styles.avatarWrapper}>
-                      <View
-                        style={[
-                          styles.contactAvatar,
-                          {
-                            backgroundColor: conv.avatarColor,
-                            width: isCollapsed ? 36 : 38,
-                            height: isCollapsed ? 36 : 38,
-                            borderRadius: isCollapsed ? 18 : 19,
-                          },
-                        ]}
-                      >
-                        <Text style={styles.contactAvatarText}>
-                          {conv.avatar}
-                        </Text>
-                      </View>
-
-                      {conv.unread && (
-                        <View style={styles.unreadBadge}>
-                          <Text style={styles.unreadBadgeText}>
-                            {conv.unreadCount || 1}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {!isCollapsed && (
-                      <View style={styles.contactInfo}>
-                        <Text
-                          style={styles.contactName}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {firstName}
-                        </Text>
-
-                        <Text style={styles.contactTime}>{conv.time}</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </Animated.View>
-
-          <View style={styles.verticalDivider} />
-
-          {/* CHAT PANEL */}
-          <View style={styles.chatPanel}>
-            <View style={styles.chatHeader}>
-              <View
-                style={[
-                  styles.chatAvatar,
-                  { backgroundColor: selectedConversation?.avatarColor },
-                ]}
-              >
-                <Text style={styles.chatAvatarText}>
-                  {selectedConversation?.avatar}
-                </Text>
-              </View>
-
-              <View style={styles.chatInfo}>
-                <Text
-                  style={styles.chatName}
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                >
-                  {selectedConversation?.name}
-                </Text>
-
-                <Text style={styles.chatStatus}>Active now</Text>
-              </View>
-            </View>
-
-            <FlatList
-              ref={flatListRef}
-              style={styles.messagesList}
-              contentContainerStyle={styles.messagesContent}
-              data={allMessages[selectedConversationId] || []}
-              keyExtractor={(item) => item.id}
-              renderItem={renderMessage}
-              showsVerticalScrollIndicator={false}
-              onContentSizeChange={() =>
-                flatListRef.current?.scrollToEnd({ animated: false })
-              }
-              ListEmptyComponent={
-                <View style={styles.emptyMessages}>
-                  <Feather name="send" size={32} color={COLORS.gray300} />
-                  <Text style={styles.emptyMessagesText}>
-                    No messages yet. Say hello!
-                  </Text>
-                </View>
-              }
-            />
-
-            <View style={styles.inputBar}>
-              <TouchableOpacity
-                activeOpacity={0.75}
-                style={styles.attachButton}
-                onPress={() =>
-                  Alert.alert(
-                    'Coming Soon',
-                    'File attachments will be available soon.'
-                  )
-                }
-              >
-                <Feather name="paperclip" size={18} color={COLORS.gray500} />
-              </TouchableOpacity>
-
-              <TextInput
-                style={styles.messageInput}
-                placeholder="Type a message..."
-                placeholderTextColor={COLORS.gray400}
-                value={messageInput}
-                onChangeText={setMessageInput}
-                multiline
-                returnKeyType="send"
-                blurOnSubmit={false}
-                onSubmitEditing={handleSend}
-              />
-
-              <TouchableOpacity
-                activeOpacity={0.75}
-                style={[
-                  styles.sendButton,
-                  messageInput.trim()
-                    ? styles.sendButtonActive
-                    : styles.sendButtonInactive,
-                ]}
-                disabled={!messageInput.trim()}
-                onPress={handleSend}
-              >
-                <Feather
-                  name="send"
-                  size={14}
-                  color={messageInput.trim() ? COLORS.white : COLORS.gray400}
-                />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-  },
+function dayKey(dateString) {
+  const d = toUtcDate(dateString);
 
-  keyboardView: {
-    flex: 1,
-  },
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
 
-  topHeader: {
-    height: 52,
-    backgroundColor: COLORS.white,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.gray200,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+function dateChipLabel(dateString) {
+  const d = toUtcDate(dateString);
 
-  topIconButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  const today = new Date();
 
-  topTitle: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
 
-  body: {
-    flex: 1,
-    flexDirection: 'row',
-  },
+  const sameDay = (a, b) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
 
-  contactsPanel: {
-    backgroundColor: COLORS.white,
-    overflow: 'hidden',
-  },
+  if (sameDay(d, today)) return 'Today';
+  if (sameDay(d, yesterday)) return 'Yesterday';
 
-  contactsTopRow: {
-    height: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.gray100,
-    gap: 4,
-  },
+  return d.toLocaleDateString(
+    'en-US',
+    {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+    }
+  );
+}
 
-  contactsTopRowCollapsed: {
-    justifyContent: 'center',
-  },
+/*
+ * Builds a flat render list: date-chip items interspersed
+ * with message items, each message annotated with its group
+ * position (first/last in its consecutive same-sender run).
+ * This drives grouped timestamps.
+ */
+function buildThreadItems(messages) {
+  const items = [];
+  let lastDayKey = null;
 
-  contactSearchWrapper: {
-    flex: 1,
-    height: 28,
-    position: 'relative',
-    justifyContent: 'center',
-  },
+  messages.forEach((msg, index) => {
+    const thisDayKey = dayKey(msg.dateSent);
 
-  contactSearchIcon: {
-    position: 'absolute',
-    left: 7,
-    zIndex: 2,
-  },
+    if (thisDayKey !== lastDayKey) {
+      items.push({
+        type: 'date',
+        id: `date-${thisDayKey}`,
+        label: dateChipLabel(msg.dateSent),
+      });
 
-  contactSearchInput: {
-    height: 28,
-    backgroundColor: COLORS.gray100,
-    borderRadius: 6,
-    paddingLeft: 22,
-    paddingRight: 8,
-    fontSize: 11,
-    color: COLORS.black,
-  },
+      lastDayKey = thisDayKey;
+    }
 
-  collapseButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+    const prev = messages[index - 1];
+    const next = messages[index + 1];
 
-  contactsScroll: {
-    flex: 1,
-  },
+    const isFirstInGroup =
+      !prev ||
+      prev.senderId !== msg.senderId ||
+      dayKey(prev.dateSent) !== thisDayKey;
 
-  contactRow: {
-    width: '100%',
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.gray50,
-    backgroundColor: COLORS.white,
-  },
+    const isLastInGroup =
+      !next ||
+      next.senderId !== msg.senderId ||
+      dayKey(next.dateSent) !== thisDayKey;
 
-  contactRowSelected: {
-    backgroundColor: COLORS.cyanLight,
-  },
+    items.push({
+      type: 'message',
+      id: String(msg.messageId ?? `${index}-${msg.dateSent}`),
+      msg,
+      isFirstInGroup,
+      isLastInGroup,
+    });
+  });
 
-  avatarWrapper: {
-    position: 'relative',
-  },
+  return items;
+}
 
-  contactAvatar: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+/* =========================================================
+   MAIN SCREEN
+========================================================= */
 
-  contactAvatarText: {
-    color: COLORS.white,
-    fontWeight: '700',
-    fontSize: 14,
-  },
+export default function MessagesScreen({
+  navigation,
+  route,
+}) {
+  const insets = useSafeAreaInsets();
 
-  unreadBadge: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: COLORS.cyan,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  const {
+    width: screenWidth,
+  } = useWindowDimensions();
 
-  unreadBadgeText: {
-    color: COLORS.white,
-    fontSize: 9,
-    fontWeight: '700',
-  },
+  /* =======================================================
+     RESPONSIVE VALUES
+  ======================================================= */
 
-  contactInfo: {
-    width: '100%',
-    paddingHorizontal: 2,
-    marginTop: 5,
-  },
+  const isSmallPhone =
+    screenWidth < 360;
 
-  contactName: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: COLORS.gray800,
-    textAlign: 'center',
-  },
+  const horizontalPadding =
+    isSmallPhone ? 14 : 20;
 
-  contactTime: {
-    fontSize: 9,
-    color: COLORS.gray400,
-    textAlign: 'center',
-    marginTop: 1,
-  },
+  const messageHorizontalPadding =
+    isSmallPhone ? 12 : 16;
 
-  verticalDivider: {
-    width: 1,
-    backgroundColor: COLORS.gray200,
-  },
+  /* =======================================================
+     FONTS
+  ======================================================= */
 
-  chatPanel: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-  },
+  const [fontsLoaded] = useFonts({
+    DMSans_400Regular,
+    DMSans_500Medium,
+    DMSans_700Bold,
+  });
 
-  chatHeader: {
-    height: 52,
-    backgroundColor: COLORS.white,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.gray200,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    gap: 10,
-  },
+  /* =======================================================
+     USER
+  ======================================================= */
 
-  chatAvatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  const [myUserId, setMyUserId] =
+    useState(null);
 
-  chatAvatarText: {
-    color: COLORS.white,
-    fontWeight: '700',
-    fontSize: 13,
-  },
+  const myUserIdRef =
+    useRef(null);
 
-  chatInfo: {
-    flex: 1,
-  },
+  /* =======================================================
+     VIEW STATE
+  ======================================================= */
 
-  chatName: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
+  const [view, setView] =
+    useState('list');
 
-  chatStatus: {
-    fontSize: 10,
-    color: COLORS.green,
-    fontWeight: '500',
-    marginTop: 1,
-  },
+  const [
+    selectedConversationId,
+    setSelectedConversationId,
+  ] = useState(null);
 
-  messagesList: {
-    flex: 1,
-    backgroundColor: COLORS.gray50,
-  },
+  /* =======================================================
+     INPUT / SEARCH
+  ======================================================= */
 
-  messagesContent: {
-    paddingHorizontal: 8,
-    paddingTop: 12,
-    paddingBottom: 8,
-    flexGrow: 1,
-  },
+  const [messageInput, setMessageInput] =
+    useState('');
 
-  messageRow: {
-    flexDirection: 'row',
-    marginBottom: 8,
-  },
+  const [searchQuery, setSearchQuery] =
+    useState('');
 
-  messageBubble: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 16,
-  },
+  /* =======================================================
+     DATA
+  ======================================================= */
 
-  sentBubble: {
-    backgroundColor: COLORS.cyanMessage,
-    borderBottomRightRadius: 2,
-  },
+  const [conversations, setConversations] =
+    useState([]);
 
-  receivedBubble: {
-    backgroundColor: COLORS.white,
-    borderBottomLeftRadius: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
+  const [allMessages, setAllMessages] =
+    useState({});
 
-  messageText: {
-    fontSize: 13,
-    lineHeight: 19,
-  },
+  /* =======================================================
+     LOADING / CONNECTION
+  ======================================================= */
 
-  sentMessageText: {
-    color: COLORS.white,
-  },
+  const [loading, setLoading] =
+    useState(true);
 
-  receivedMessageText: {
-    color: COLORS.gray800,
-  },
+  const [loadingMessages, setLoadingMessages] =
+    useState(false);
 
-  messageTime: {
-    fontSize: 9,
-    marginTop: 3,
-    textAlign: 'right',
-  },
+  const [connected, setConnected] =
+    useState(false);
 
-  sentTime: {
-    color: 'rgba(255,255,255,0.75)',
-  },
+  const [otherOnline, setOtherOnline] =
+    useState(false);
 
-  receivedTime: {
-    color: COLORS.gray400,
-  },
+  /* =======================================================
+     REFS
+  ======================================================= */
 
-  emptyMessages: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 120,
-  },
+  const flatListRef =
+    useRef(null);
 
-  emptyMessagesText: {
-    marginTop: 10,
-    fontSize: 13,
-    color: COLORS.gray400,
-  },
+  const selectedConversationRef =
+    useRef(null);
 
-  inputBar: {
-    backgroundColor: COLORS.white,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.gray200,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
+  /* =======================================================
+     SELECTED CONVERSATION REF
+  ======================================================= */
 
-  attachButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  useEffect(() => {
+    selectedConversationRef.current =
+      selectedConversationId;
+  }, [
+    selectedConversationId,
+  ]);
 
-  messageInput: {
-    flex: 1,
-    minHeight: 36,
-    maxHeight: 100,
-    backgroundColor: COLORS.gray100,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    fontSize: 13,
-    color: COLORS.black,
-  },
+  /* =======================================================
+     SELECTED CONVERSATION
+  ======================================================= */
 
-  sendButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  const selectedConversation =
+    useMemo(
+      () =>
+        conversations.find(
+          (c) =>
+            c.otherUserId ===
+            selectedConversationId
+        ),
+      [
+        conversations,
+        selectedConversationId,
+      ]
+    );
 
-  sendButtonActive: {
-    backgroundColor: COLORS.cyan,
-  },
+  /* =======================================================
+     FILTERED CONVERSATIONS
+  ======================================================= */
 
-  sendButtonInactive: {
-    backgroundColor: COLORS.gray200,
-  },
-});
+  const filteredConversations =
+    useMemo(() => {
+      const q =
+        searchQuery
+          .trim()
+          .toLowerCase();
+
+      if (!q) {
+        return conversations;
+      }
+
+      return conversations.filter(
+        (c) =>
+          (
+            c.otherUserName || ''
+          )
+            .toLowerCase()
+            .includes(q)
+      );
+    }, [
+      conversations,
+      searchQuery,
+    ]);
+
+  /* =======================================================
+     LOAD CONVERSATIONS
+  ======================================================= */
+
+  const loadConversations =
+    useCallback(async () => {
+      try {
+        const res =
+          await api.get(
+            '/api/Message/conversations'
+          );
+
+        setConversations(
+          res.data
+        );
+
+        return res.data;
+      } catch (err) {
+        console.error(
+          'Failed to load conversations:',
+          err
+        );
+
+        return [];
+      }
+    }, []);
+
+  /* =======================================================
+     LOAD MESSAGE HISTORY
+  ======================================================= */
+
+  const loadHistory =
+    useCallback(
+      async (otherUserId) => {
+        setLoadingMessages(true);
+
+        try {
+          const res =
+            await api.get(
+              `/api/Message/${otherUserId}`
+            );
+
+          setAllMessages(
+            (prev) => ({
+              ...prev,
+              [otherUserId]:
+                res.data,
+            })
+          );
+        } catch (err) {
+          console.error(
+            'Failed to load message history:',
+            err
+          );
+        } finally {
+          setLoadingMessages(
+            false
+          );
+        }
+      },
+      []
+    );
+
+  /* =======================================================
+     INCOMING CHAT MESSAGE
+  ======================================================= */
+
+  const handleIncomingMessage =
+    useCallback(
+      (dto) => {
+        const currentUserId =
+          myUserIdRef.current;
+
+        const otherUserId =
+          dto.senderId ===
+          currentUserId
+            ? dto.receiverId
+            : dto.senderId;
+
+        setAllMessages(
+          (prev) => ({
+            ...prev,
+
+            [otherUserId]: [
+              ...(prev[
+                otherUserId
+              ] || []),
+              dto,
+            ],
+          })
+        );
+
+        const isIncoming =
+          dto.senderId !==
+          currentUserId;
+
+        const isCurrentlyOpen =
+          selectedConversationRef.current ===
+            otherUserId &&
+          view === 'thread';
+
+        setConversations(
+          (prev) => {
+            const exists =
+              prev.find(
+                (c) =>
+                  c.otherUserId ===
+                  otherUserId
+              );
+
+            const updated =
+              exists
+                ? prev.map((c) =>
+                    c.otherUserId ===
+                    otherUserId
+                      ? {
+                          ...c,
+
+                          lastMessageText:
+                            dto.messageText,
+
+                          lastMessageDate:
+                            dto.dateSent,
+
+                          lastMessageFromMe:
+                            dto.senderId ===
+                            currentUserId,
+
+                          unreadCount:
+                            isIncoming &&
+                            !isCurrentlyOpen
+                              ? (c.unreadCount || 0) + 1
+                              : c.unreadCount || 0,
+                        }
+                      : c
+                  )
+                : [
+                    {
+                      otherUserId,
+
+                      otherUserName:
+                        `User ${otherUserId}`,
+
+                      lastMessageText:
+                        dto.messageText,
+
+                      lastMessageDate:
+                        dto.dateSent,
+
+                      lastMessageFromMe:
+                        dto.senderId ===
+                        currentUserId,
+
+                      unreadCount:
+                        isIncoming &&
+                        !isCurrentlyOpen
+                          ? 1
+                          : 0,
+                    },
+
+                    ...prev,
+                  ];
+
+            return updated.sort(
+              (a, b) =>
+                toUtcDate(b.lastMessageDate) -
+                toUtcDate(a.lastMessageDate)
+            );
+          }
+        );
+
+        if (isCurrentlyOpen && isIncoming) {
+          markThreadAsRead(otherUserId).catch(() => {});
+        }
+
+        if (
+          selectedConversationRef.current ===
+          otherUserId
+        ) {
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd(
+              {
+                animated: true,
+              }
+            );
+          }, 100);
+        }
+      },
+      [view]
+    );
+
+  /* =======================================================
+     MESSAGES READ (live read-receipt updates)
+  ======================================================= */
+
+  const handleMessagesRead =
+    useCallback(
+      (readerUserId) => {
+        setAllMessages(
+          (prev) => {
+            const thread =
+              prev[readerUserId];
+
+            if (!thread) return prev;
+
+            return {
+              ...prev,
+
+              [readerUserId]:
+                thread.map((m) =>
+                  m.senderId ===
+                  myUserIdRef.current
+                    ? { ...m, isRead: true }
+                    : m
+                ),
+            };
+          }
+        );
+      },
+      []
+    );
+
+  /* =======================================================
+     INITIALIZE
+  ======================================================= */
+
+  useEffect(() => {
+    let mounted = true;
+
+    const removeMessageListener =
+      addMessageListener(
+        handleIncomingMessage
+      );
+
+    const removeReadListener =
+      addReadListener(
+        handleMessagesRead
+      );
+
+    setConnected(
+      isChatConnected()
+    );
+
+    (async () => {
+      try {
+        const idStr =
+          await AsyncStorage.getItem(
+            'userId'
+          );
+
+        const id =
+          idStr
+            ? parseInt(
+                idStr,
+                10
+              )
+            : null;
+
+        if (!mounted) return;
+
+        myUserIdRef.current =
+          id;
+
+        setMyUserId(id);
+
+        const convos =
+          await loadConversations();
+
+        if (!mounted) return;
+
+        const recipientId =
+          route?.params
+            ?.recipientId;
+
+        const recipientName =
+          route?.params
+            ?.recipientName;
+
+        if (recipientId) {
+          const existing =
+            convos.find(
+              (c) =>
+                c.otherUserId ===
+                recipientId
+            );
+
+          if (!existing) {
+            setConversations(
+              (prev) => [
+                {
+                  otherUserId:
+                    recipientId,
+
+                  otherUserName:
+                    recipientName ??
+                    `User ${recipientId}`,
+
+                  lastMessageText:
+                    null,
+
+                  lastMessageDate:
+                    null,
+
+                  lastMessageFromMe:
+                    false,
+
+                  unreadCount: 0,
+                },
+
+                ...prev,
+              ]
+            );
+          }
+
+          openThread(
+            recipientId
+          );
+        }
+      } catch (err) {
+        console.error(
+          'Failed to initialize messages:',
+          err
+        );
+      } finally {
+        if (mounted) {
+          setLoading(
+            false
+          );
+        }
+      }
+    })();
+
+    return () => {
+      mounted = false;
+
+      removeMessageListener();
+      removeReadListener();
+    };
+  }, [
+    handleIncomingMessage,
+    handleMessagesRead,
+    loadConversations,
+    route,
+  ]);
+
+  /* =======================================================
+     OPEN THREAD
+  ======================================================= */
+
+  const openThread =
+    useCallback(
+      (otherUserId) => {
+        setSelectedConversationId(
+          otherUserId
+        );
+
+        setView('thread');
+
+        setConversations(
+          (prev) =>
+            prev.map((c) =>
+              c.otherUserId === otherUserId
+                ? { ...c, unreadCount: 0 }
+                : c
+            )
+        );
+
+        markThreadAsRead(otherUserId).catch(() => {});
+
+        checkOnline(otherUserId)
+          .then(setOtherOnline)
+          .catch(() => setOtherOnline(false));
+
+        if (
+          !allMessages[
+            otherUserId
+          ]
+        ) {
+          loadHistory(
+            otherUserId
+          );
+        }
+
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd(
+            {
+              animated: false,
+            }
+          );
+        }, 150);
+      },
+      [
+        allMessages,
+        loadHistory,
+      ]
+    );
+
+  /* =======================================================
+     CLOSE THREAD
+  ======================================================= */
+
+  const closeThread =
+    useCallback(() => {
+      setView('list');
+
+      setSelectedConversationId(
+        null
+      );
+
+      setMessageInput('');
+    }, []);
+
+  /* =======================================================
+     SEND MESSAGE
+  ======================================================= */
+
+  const handleSend =
+    async () => {
+      if (
+        !messageInput.trim() ||
+        !selectedConversationId
+      ) {
+        return;
+      }
+
+      const text =
+        messageInput.trim();
+
+      setMessageInput('');
+
+      try {
+        await sendChatMessage(
+          selectedConversationId,
+          text
+        );
+      } catch (err) {
+        Alert.alert(
+          'Error',
+          'Could not send message. Please try again.'
+        );
+
+        setMessageInput(
+          text
+        );
+      }
+    };
+
+  /* =======================================================
+     CONVERSATION ROW
+  ======================================================= */
+
+  const renderConversationRow =
+    ({
+      item,
+      index,
+    }) => {
+      const unreadCount =
+        item.unreadCount || 0;
+
+      const isUnread =
+        unreadCount > 0;
+
+      const name =
+        item.otherUserName ||
+        `User ${item.otherUserId}`;
+
+      const initial =
+        name
+          .charAt(0)
+          .toUpperCase();
+
+      return (
+        <TouchableOpacity
+          activeOpacity={0.7}
+          style={[
+            styles.row,
+
+            index === 0 && {
+              marginTop: 4,
+            },
+          ]}
+          onPress={() =>
+            openThread(
+              item.otherUserId
+            )
+          }
+        >
+          <View
+            style={
+              styles.avatarWrap
+            }
+          >
+            <View
+              style={[
+                styles.avatar,
+
+                {
+                  backgroundColor:
+                    avatarColorFor(
+                      item.otherUserId
+                    ),
+                },
+              ]}
+            >
+              <Text
+                style={
+                  styles.avatarText
+                }
+              >
+                {initial}
+              </Text>
+            </View>
+          </View>
+
+          <View
+            style={
+              styles.rowContent
+            }
+          >
+            <View
+              style={
+                styles.rowTopLine
+              }
+            >
+              <Text
+                style={[
+                  styles.rowName,
+
+                  isUnread &&
+                    styles.rowNameUnread,
+                ]}
+                numberOfLines={1}
+              >
+                {name}
+              </Text>
+
+              <Text
+                style={[
+                  styles.rowTime,
+
+                  isUnread &&
+                    styles.rowTimeUnread,
+                ]}
+              >
+                {formatShortTime(
+                  item.lastMessageDate
+                )}
+              </Text>
+            </View>
+
+            <View
+              style={
+                styles.rowBottomLine
+              }
+            >
+              <Text
+                style={
+                  styles.rowPreview
+                }
+                numberOfLines={1}
+              >
+                {item.lastMessageFromMe
+                  ? 'You: '
+                  : ''}
+
+                {item.lastMessageText ||
+                  'Say hello 👋'}
+              </Text>
+
+              {isUnread && (
+                <View
+                  style={
+                    styles.unreadBadge
+                  }
+                >
+                  <Text
+                    style={
+                      styles.unreadBadgeText
+                    }
+                  >
+                    {unreadCount > 99
+                      ? '99+'
+                      : unreadCount}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    };
+
+  /* =======================================================
+     MESSAGE ROW
+  ======================================================= */
+
+  const threadItems =
+    useMemo(
+      () =>
+        buildThreadItems(
+          allMessages[
+            selectedConversationId
+          ] || []
+        ),
+      [
+        allMessages,
+        selectedConversationId,
+      ]
+    );
+
+  const renderThreadItem =
+    ({ item }) => {
+      if (item.type === 'date') {
+        return (
+          <View
+            style={
+              styles.dateChipWrap
+            }
+          >
+            <View
+              style={
+                styles.dateChip
+              }
+            >
+              <Text
+                style={
+                  styles.dateChipText
+                }
+              >
+                {item.label}
+              </Text>
+            </View>
+          </View>
+        );
+      }
+
+      const {
+        msg,
+        isFirstInGroup,
+        isLastInGroup,
+      } = item;
+
+      const sent =
+        msg.senderId ===
+        myUserId;
+
+      const grouped =
+        !isLastInGroup;
+
+      return (
+        <View>
+          <View
+            style={[
+              styles.messageRow,
+
+              {
+                justifyContent:
+                  sent
+                    ? 'flex-end'
+                    : 'flex-start',
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.bubble,
+
+                sent
+                  ? styles.bubbleSent
+                  : styles.bubbleReceived,
+
+                grouped &&
+                  (sent
+                    ? styles.bubbleSentGrouped
+                    : styles.bubbleReceivedGrouped),
+              ]}
+            >
+              <Text
+                style={[
+                  styles.bubbleText,
+
+                  sent
+                    ? styles.bubbleTextSent
+                    : styles.bubbleTextReceived,
+                ]}
+              >
+                {msg.messageText}
+              </Text>
+            </View>
+          </View>
+
+          {isLastInGroup && (
+            <Text
+              style={[
+                styles.bubbleTimestamp,
+
+                sent
+                  ? styles.bubbleTimestampSent
+                  : styles.bubbleTimestampReceived,
+              ]}
+            >
+              {formatBubbleTime(
+                msg.dateSent
+              )}
+            </Text>
+          )}
+        </View>
+      );
+    };
+
+  const lastMessage =
+    (
+      allMessages[
+        selectedConversationId
+      ] || []
+    ).slice(-1)[0];
+
+  const showReadReceipt =
+    lastMessage &&
+    lastMessage.senderId === myUserId &&
+    lastMessage.isRead;
+
+  /* =======================================================
+     LOADING SCREEN
+  ======================================================= */
+
+  if (
+    !fontsLoaded ||
+    loading
+  ) {
+    return (
+      <View
+        style={[
+          styles.safeArea,
+          styles.center,
+
+          {
+            paddingTop:
+              insets.top,
+
+            paddingBottom:
+              insets.bottom,
+          },
+        ]}
+      >
+        <ActivityIndicator
+          size="large"
+          color={COLORS.blue}
+        />
+      </View>
+    );
+  }
+
+  /* =======================================================
+     THREAD VIEW
+  ======================================================= */
+
+  if (
+    view === 'thread' &&
+    selectedConversation
+  ) {
+    const name =
+      selectedConversation.otherUserName ||
+      `User ${selectedConversation.otherUserId}`;
+
+    const initial =
+      name
+        .charAt(0)
+        .toUpperCase();
+
+    return (
+      <View
+        style={styles.safeArea}
+      >
+        <KeyboardAvoidingView
+          style={styles.flex}
+
+          behavior={
+            Platform.OS === 'ios'
+              ? 'padding'
+              : 'height'
+          }
+
+          keyboardVerticalOffset={0}
+        >
+
+          {/* =============================================
+              CHAT HEADER
+          ============================================= */}
+
+          <View
+            style={[
+              styles.threadHeader,
+
+              {
+                paddingTop:
+                  insets.top + 12,
+              },
+            ]}
+          >
+            <TouchableOpacity
+              onPress={
+                closeThread
+              }
+              style={
+                styles.backButton
+              }
+              activeOpacity={0.7}
+              hitSlop={{
+                top: 8,
+                bottom: 8,
+                left: 8,
+                right: 8,
+              }}
+            >
+              <Feather
+                name="arrow-left"
+                size={22}
+                color={
+                  COLORS.black
+                }
+              />
+            </TouchableOpacity>
+
+            <View
+              style={[
+                styles.avatar,
+
+                styles.threadAvatar,
+
+                {
+                  backgroundColor:
+                    avatarColorFor(
+                      selectedConversation.otherUserId
+                    ),
+                },
+              ]}
+            >
+              <Text
+                style={
+                  styles.avatarText
+                }
+              >
+                {initial}
+              </Text>
+            </View>
+
+            <View
+              style={{ flex: 1 }}
+            >
+              <Text
+                style={
+                  styles.threadName
+                }
+                numberOfLines={1}
+              >
+                {name}
+              </Text>
+
+              <Text
+                style={
+                  styles.threadStatus
+                }
+              >
+                {otherOnline
+                  ? 'Active now'
+                  : 'Offline'}
+              </Text>
+            </View>
+          </View>
+
+          {/* =============================================
+              MESSAGE LIST
+          ============================================= */}
+
+          {loadingMessages ? (
+            <View
+              style={[
+                styles.flex,
+                styles.center,
+              ]}
+            >
+              <ActivityIndicator
+                size="large"
+                color={
+                  COLORS.blue
+                }
+              />
+            </View>
+          ) : (
+            <FlatList
+              ref={flatListRef}
+
+              style={styles.flex}
+
+              data={threadItems}
+
+              keyExtractor={(item) =>
+                item.id
+              }
+
+              renderItem={
+                renderThreadItem
+              }
+
+              contentContainerStyle={[
+                styles.messagesContent,
+
+                {
+                  paddingHorizontal:
+                    messageHorizontalPadding,
+                },
+              ]}
+
+              keyboardShouldPersistTaps="handled"
+
+              keyboardDismissMode={
+                Platform.OS === 'ios'
+                  ? 'interactive'
+                  : 'on-drag'
+              }
+
+              automaticallyAdjustKeyboardInsets={
+                Platform.OS === 'ios'
+              }
+
+              onContentSizeChange={() =>
+                flatListRef.current?.scrollToEnd(
+                  {
+                    animated: false,
+                  }
+                )
+              }
+
+              ListEmptyComponent={
+                <View
+                  style={[
+                    styles.center,
+                    styles.emptyMessages,
+                  ]}
+                >
+                  <Text
+                    style={
+                      styles.emptyText
+                    }
+                  >
+                    No messages yet.
+                    Say hello!
+                  </Text>
+                </View>
+              }
+
+              ListFooterComponent={
+                showReadReceipt ? (
+                  <View
+                    style={
+                      styles.readReceiptRow
+                    }
+                  >
+                    <Feather
+                      name="check"
+                      size={13}
+                      color={
+                        COLORS.blue
+                      }
+                    />
+
+                    <Text
+                      style={
+                        styles.readReceiptText
+                      }
+                    >
+                      Read
+                    </Text>
+                  </View>
+                ) : null
+              }
+            />
+          )}
+
+          {/* =============================================
+              MESSAGE INPUT
+          ============================================= */}
+
+          <View
+            style={[
+              styles.inputBar,
+
+              {
+                paddingBottom:
+                  Math.max(
+                    insets.bottom,
+                    10
+                  ),
+              },
+            ]}
+          >
+            <TextInput
+              style={
+                styles.messageInput
+              }
+
+              placeholder="Message"
+
+              placeholderTextColor={
+                COLORS.gray400
+              }
+
+              value={
+                messageInput
+              }
+
+              onChangeText={
+                setMessageInput
+              }
+
+              multiline
+
+              maxLength={4000}
+
+              returnKeyType="send"
+
+              blurOnSubmit={false}
+
+              onSubmitEditing={
+                handleSend
+              }
+
+              textAlignVertical="center"
+            />
+
+            <TouchableOpacity
+              activeOpacity={0.75}
+
+              style={[
+                styles.sendButton,
+
+                messageInput.trim() &&
+                  styles.sendButtonActive,
+              ]}
+
+              disabled={
+                !messageInput.trim()
+              }
+
+              onPress={
+                handleSend
+              }
+
+              hitSlop={{
+                top: 6,
+                bottom: 6,
+                left: 6,
+                right: 6,
+              }}
+            >
+              <Feather
+                name="arrow-up"
+                size={18}
+                color={
+                  messageInput.trim()
+                    ? COLORS.white
+                    : COLORS.gray400
+                }
+              />
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    );
+  }
+
+  /* =======================================================
+     CONVERSATION LIST
+  ======================================================= */
+
+  return (
+    <View
+      style={styles.safeArea}
+    >
+
+      {/* ===============================================
+          MESSAGES HEADER
+      =============================================== */}
+
+      <View
+        style={[
+          styles.listHeader,
+
+          {
+            paddingTop:
+              insets.top + 12,
+
+            paddingHorizontal:
+              horizontalPadding,
+          },
+        ]}
+      >
+        <View
+          style={
+            styles.listHeaderTopRow
+          }
+        >
+          <TouchableOpacity
+            onPress={() =>
+              navigation.goBack()
+            }
+
+            activeOpacity={0.7}
+
+            style={
+              styles.backButton
+            }
+
+            hitSlop={{
+              top: 8,
+              bottom: 8,
+              left: 8,
+              right: 8,
+            }}
+          >
+            <Feather
+              name="arrow-left"
+              size={22}
+              color={
+                COLORS.black
+              }
+            />
+          </TouchableOpacity>
+
+          <Text
+            style={
+              styles.listTitle
+            }
+          >
+            Messages
+          </Text>
+
+          {!connected && (
+            <ActivityIndicator
+              size="small"
+              color={
+                COLORS.gray400
+              }
+            />
+          )}
+        </View>
+
+        {/* SEARCH */}
+
+        <View
+          style={
+            styles.searchWrap
+          }
+        >
+          <Feather
+            name="search"
+            size={16}
+            color={
+              COLORS.gray400
+            }
+            style={
+              styles.searchIcon
+            }
+          />
+
+          <TextInput
+            style={
+              styles.searchInput
+            }
+
+            placeholder="Search"
+
+            placeholderTextColor={
+              COLORS.gray400
+            }
+
+            value={
+              searchQuery
+            }
+
+            onChangeText={
+              setSearchQuery
+            }
+
+            autoCorrect={false}
+
+            autoCapitalize="none"
+
+            returnKeyType="search"
+          />
+        </View>
+      </View>
+
+      {/* ===============================================
+          CONVERSATION LIST
+      =============================================== */}
+
+      <FlatList
+        data={
+          filteredConversations
+        }
+
+        keyExtractor={(item) =>
+          String(
+            item.otherUserId
+          )
+        }
+
+        renderItem={
+          renderConversationRow
+        }
+
+        keyboardShouldPersistTaps="handled"
+
+        contentContainerStyle={[
+          styles.listContent,
+
+          {
+            paddingHorizontal:
+              horizontalPadding,
+
+            paddingBottom:
+              24 +
+              insets.bottom,
+          },
+        ]}
+
+        ListEmptyComponent={
+          <View
+            style={[
+              styles.center,
+
+              {
+                paddingTop: 60,
+              },
+            ]}
+          >
+            <Text
+              style={
+                styles.emptyText
+              }
+            >
+              No conversations yet
+            </Text>
+          </View>
+        }
+      />
+    </View>
+  );
+}
+
+/* =========================================================
+   FONTS
+========================================================= */
+
+const F = {
+  regular:
+    'DMSans_400Regular',
+
+  medium:
+    'DMSans_500Medium',
+
+  bold:
+    'DMSans_700Bold',
+};
+
+/* =========================================================
+   STYLES
+========================================================= */
+
+const styles =
+  StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor:
+        COLORS.white,
+    },
+
+    flex: {
+      flex: 1,
+    },
+
+    center: {
+      alignItems:
+        'center',
+
+      justifyContent:
+        'center',
+    },
+
+    listHeader: {
+      paddingBottom: 10,
+
+      backgroundColor:
+        COLORS.white,
+    },
+
+    listHeaderTopRow: {
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      minHeight: 40,
+
+      marginBottom: 14,
+    },
+
+    backButton: {
+      width: 36,
+      height: 36,
+
+      alignItems:
+        'center',
+
+      justifyContent:
+        'center',
+
+      marginRight: 4,
+    },
+
+    listTitle: {
+      flex: 1,
+
+      minWidth: 0,
+
+      fontFamily:
+        F.bold,
+
+      fontSize: 26,
+
+      lineHeight: 32,
+
+      color:
+        COLORS.black,
+    },
+
+    searchWrap: {
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      backgroundColor:
+        COLORS.gray100,
+
+      borderRadius: 12,
+
+      paddingHorizontal: 12,
+
+      height: 42,
+    },
+
+    searchIcon: {
+      marginRight: 8,
+    },
+
+    searchInput: {
+      flex: 1,
+
+      minWidth: 0,
+
+      height: 42,
+
+      fontFamily:
+        F.regular,
+
+      fontSize: 15,
+
+      color:
+        COLORS.black,
+
+      paddingVertical: 0,
+    },
+
+    listContent: {
+      flexGrow: 1,
+
+      backgroundColor:
+        COLORS.backdrop,
+
+      paddingBottom: 24,
+    },
+
+    row: {
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      paddingVertical: 14,
+    },
+
+    avatarWrap: {
+      marginRight: 14,
+    },
+
+    avatar: {
+      width: 52,
+      height: 52,
+
+      borderRadius: 26,
+
+      alignItems:
+        'center',
+
+      justifyContent:
+        'center',
+
+      flexShrink: 0,
+    },
+
+    avatarText: {
+      fontFamily:
+        F.bold,
+
+      fontSize: 19,
+
+      color:
+        COLORS.white,
+    },
+
+    rowContent: {
+      flex: 1,
+
+      minWidth: 0,
+    },
+
+    rowTopLine: {
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      marginBottom: 3,
+
+      minWidth: 0,
+    },
+
+    rowName: {
+      flex: 1,
+
+      minWidth: 0,
+
+      fontFamily:
+        F.medium,
+
+      fontSize: 16,
+
+      color:
+        COLORS.black,
+
+      marginRight: 10,
+    },
+
+    rowNameUnread: {
+      fontFamily:
+        F.bold,
+    },
+
+    rowTime: {
+      flexShrink: 0,
+
+      fontFamily:
+        F.regular,
+
+      fontSize: 13,
+
+      color:
+        COLORS.gray400,
+    },
+
+    rowTimeUnread: {
+      fontFamily:
+        F.bold,
+
+      color:
+        COLORS.blue,
+    },
+
+    rowBottomLine: {
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      minWidth: 0,
+    },
+
+    rowPreview: {
+      flex: 1,
+
+      minWidth: 0,
+
+      fontFamily:
+        F.regular,
+
+      fontSize: 14,
+
+      color:
+        COLORS.gray500,
+    },
+
+    unreadBadge: {
+      minWidth: 20,
+      height: 20,
+
+      borderRadius: 10,
+
+      backgroundColor:
+        COLORS.blue,
+
+      alignItems:
+        'center',
+
+      justifyContent:
+        'center',
+
+      paddingHorizontal: 5,
+
+      marginLeft: 8,
+
+      flexShrink: 0,
+    },
+
+    unreadBadgeText: {
+      fontFamily:
+        F.bold,
+
+      fontSize: 11,
+
+      color:
+        COLORS.white,
+    },
+
+    threadHeader: {
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      paddingHorizontal: 16,
+
+      paddingBottom: 12,
+
+      minHeight: 60,
+
+      backgroundColor:
+        COLORS.white,
+
+      borderBottomWidth: 1,
+
+      borderBottomColor:
+        COLORS.gray100,
+    },
+
+    threadAvatar: {
+      width: 36,
+      height: 36,
+
+      borderRadius: 18,
+
+      marginLeft: 4,
+
+      marginRight: 12,
+    },
+
+    threadName: {
+      flex: 1,
+
+      minWidth: 0,
+
+      fontFamily:
+        F.bold,
+
+      fontSize: 17,
+
+      color:
+        COLORS.black,
+    },
+
+    threadStatus: {
+      fontFamily:
+        F.regular,
+
+      fontSize: 12,
+
+      color:
+        COLORS.gray400,
+
+      marginTop: 1,
+    },
+
+    messagesContent: {
+      flexGrow: 1,
+
+      paddingTop: 16,
+
+      paddingBottom: 16,
+
+      backgroundColor:
+        COLORS.backdrop,
+    },
+
+    dateChipWrap: {
+      alignItems:
+        'center',
+
+      marginVertical: 12,
+    },
+
+    dateChip: {
+      backgroundColor:
+        COLORS.gray100,
+
+      borderRadius: 12,
+
+      paddingHorizontal: 12,
+
+      paddingVertical: 5,
+    },
+
+    dateChipText: {
+      fontFamily:
+        F.medium,
+
+      fontSize: 12,
+
+      color:
+        COLORS.gray500,
+    },
+
+    messageRow: {
+      flexDirection:
+        'row',
+
+      marginBottom: 6,
+    },
+
+    bubble: {
+      maxWidth: '82%',
+
+      paddingHorizontal: 16,
+
+      paddingVertical: 10,
+
+      borderRadius: 20,
+    },
+
+    bubbleSent: {
+      backgroundColor:
+        COLORS.blue,
+
+      borderBottomRightRadius: 6,
+    },
+
+    bubbleReceived: {
+      backgroundColor:
+        COLORS.gray100,
+
+      borderBottomLeftRadius: 6,
+    },
+
+    bubbleSentGrouped: {
+      borderBottomRightRadius: 20,
+    },
+
+    bubbleReceivedGrouped: {
+      borderBottomLeftRadius: 20,
+    },
+
+    bubbleText: {
+      fontFamily:
+        F.regular,
+
+      fontSize: 15,
+
+      lineHeight: 21,
+    },
+
+    bubbleTextSent: {
+      color:
+        COLORS.white,
+    },
+
+    bubbleTextReceived: {
+      color:
+        COLORS.black,
+    },
+
+    bubbleTimestamp: {
+      fontFamily:
+        F.regular,
+
+      fontSize: 11,
+
+      color:
+        COLORS.gray400,
+
+      marginTop: 3,
+
+      marginBottom: 6,
+    },
+
+    bubbleTimestampSent: {
+      textAlign:
+        'right',
+
+      marginRight: 4,
+    },
+
+    bubbleTimestampReceived: {
+      textAlign:
+        'left',
+
+      marginLeft: 4,
+    },
+
+    readReceiptRow: {
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      justifyContent:
+        'flex-end',
+
+      paddingRight: 4,
+
+      paddingTop: 2,
+
+      gap: 4,
+    },
+
+    readReceiptText: {
+      fontFamily:
+        F.regular,
+
+      fontSize: 11,
+
+      color:
+        COLORS.gray500,
+    },
+
+    emptyMessages: {
+      flex: 1,
+
+      minHeight: 200,
+    },
+
+    emptyText: {
+      fontFamily:
+        F.regular,
+
+      fontSize: 14,
+
+      color:
+        COLORS.gray400,
+    },
+
+    inputBar: {
+      flexDirection:
+        'row',
+
+      alignItems:
+        'flex-end',
+
+      paddingHorizontal: 16,
+
+      paddingTop: 10,
+
+      backgroundColor:
+        COLORS.white,
+
+      borderTopWidth: 1,
+
+      borderTopColor:
+        COLORS.gray100,
+    },
+
+    messageInput: {
+      flex: 1,
+
+      minWidth: 0,
+
+      minHeight: 40,
+
+      maxHeight: 110,
+
+      backgroundColor:
+        COLORS.gray100,
+
+      borderRadius: 20,
+
+      paddingHorizontal: 16,
+
+      paddingTop: 10,
+
+      paddingBottom: 10,
+
+      fontFamily:
+        F.regular,
+
+      fontSize: 15,
+
+      lineHeight: 21,
+
+      color:
+        COLORS.black,
+
+      marginRight: 8,
+    },
+
+    sendButton: {
+      width: 40,
+      height: 40,
+
+      borderRadius: 20,
+
+      backgroundColor:
+        COLORS.gray300,
+
+      alignItems:
+        'center',
+
+      justifyContent:
+        'center',
+
+      flexShrink: 0,
+    },
+
+    sendButtonActive: {
+      backgroundColor:
+        COLORS.blue,
+    },
+  });

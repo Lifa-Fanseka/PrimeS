@@ -6,15 +6,18 @@ import {
   TouchableOpacity,
   Switch,
   StyleSheet,
-  SafeAreaView,
   Modal,
   Alert,
   Animated,
   Platform,
   TextInput,
   KeyboardAvoidingView,
+  ActivityIndicator,
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import api from '../api/client';
+import { logout } from '../api/auth';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const COLORS = {
   cyan: '#06B6D4',
@@ -62,6 +65,7 @@ export default function SettingsScreen({ navigation }) {
   const [selectedLanguage, setSelectedLanguage] = useState('English (US)');
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
 
   const [passwordForm, setPasswordForm] = useState({
     current: '',
@@ -98,14 +102,10 @@ export default function SettingsScreen({ navigation }) {
   };
 
   const resetPasswordForm = () => {
-    setPasswordForm({
-      current: '',
-      newPass: '',
-      confirm: '',
-    });
+    setPasswordForm({ current: '', newPass: '', confirm: '' });
   };
 
-  const handlePasswordUpdate = () => {
+  const handlePasswordUpdate = async () => {
     if (!passwordForm.current || !passwordForm.newPass || !passwordForm.confirm) {
       Alert.alert('Error', 'Please fill in all fields.');
       return;
@@ -121,13 +121,31 @@ export default function SettingsScreen({ navigation }) {
       return;
     }
 
-    Alert.alert('Success', 'Password updated successfully!');
-    setShowChangePasswordModal(false);
-    resetPasswordForm();
+    setPasswordSubmitting(true);
+    try {
+      await api.put('/api/User/me/password', {
+        currentPassword: passwordForm.current,
+        newPassword: passwordForm.newPass,
+      });
+
+      Alert.alert('Success', 'Password updated successfully!');
+      setShowChangePasswordModal(false);
+      resetPasswordForm();
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 401) {
+        Alert.alert('Error', 'Current password is incorrect.');
+      } else {
+        Alert.alert('Error', err?.response?.data ?? 'Could not update password.');
+      }
+    } finally {
+      setPasswordSubmitting(false);
+    }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setShowLogoutModal(false);
+    await logout(); // clears token/userId/role from AsyncStorage
     navigation.reset({
       index: 0,
       routes: [{ name: 'Welcome' }],
@@ -149,15 +167,10 @@ export default function SettingsScreen({ navigation }) {
           <Text style={styles.headerTitle}>PRIME SCOUT</Text>
         </View>
 
-        <Text style={styles.headerSubtitle}>
-          Update your personal information
-        </Text>
+        <Text style={styles.headerSubtitle}>Update your personal information</Text>
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.card}>
           <ExpandableRow
             title="Privacy Settings"
@@ -165,13 +178,7 @@ export default function SettingsScreen({ navigation }) {
             icon="lock"
             anim={privacyAnim}
             rotateValue={rotate(privacyAnim)}
-            onPress={() =>
-              animateToggle(
-                privacyAnim,
-                showPrivacyExpanded,
-                setShowPrivacyExpanded
-              )
-            }
+            onPress={() => animateToggle(privacyAnim, showPrivacyExpanded, setShowPrivacyExpanded)}
             borderBottom={!showPrivacyExpanded}
           />
 
@@ -196,9 +203,7 @@ export default function SettingsScreen({ navigation }) {
               <TouchableOpacity
                 activeOpacity={0.75}
                 style={styles.linkButton}
-                onPress={() =>
-                  Alert.alert('Privacy', 'Full privacy management coming soon.')
-                }
+                onPress={() => Alert.alert('Privacy', 'Full privacy management coming soon.')}
               >
                 <Text style={styles.linkText}>Manage Privacy →</Text>
               </TouchableOpacity>
@@ -220,28 +225,17 @@ export default function SettingsScreen({ navigation }) {
             icon="shield"
             anim={securityAnim}
             rotateValue={rotate(securityAnim)}
-            onPress={() =>
-              animateToggle(
-                securityAnim,
-                showSecurityExpanded,
-                setShowSecurityExpanded
-              )
-            }
+            onPress={() => animateToggle(securityAnim, showSecurityExpanded, setShowSecurityExpanded)}
             borderBottom={!showSecurityExpanded}
           />
 
           {showSecurityExpanded && (
             <View style={styles.expandedPanel}>
-              <ActionLink
-                title="Change Password"
-                onPress={() => setShowChangePasswordModal(true)}
-              />
+              <ActionLink title="Change Password" onPress={() => setShowChangePasswordModal(true)} />
 
               <ActionLink
                 title="Enable 2FA"
-                onPress={() =>
-                  Alert.alert('2FA', 'Two-factor authentication setup coming soon.')
-                }
+                onPress={() => Alert.alert('2FA', 'Two-factor authentication setup coming soon.')}
               />
             </View>
           )}
@@ -252,13 +246,7 @@ export default function SettingsScreen({ navigation }) {
             icon="globe"
             anim={languageAnim}
             rotateValue={rotate(languageAnim)}
-            onPress={() =>
-              animateToggle(
-                languageAnim,
-                showLanguageExpanded,
-                setShowLanguageExpanded
-              )
-            }
+            onPress={() => animateToggle(languageAnim, showLanguageExpanded, setShowLanguageExpanded)}
             borderBottom={!showLanguageExpanded}
           />
 
@@ -271,10 +259,7 @@ export default function SettingsScreen({ navigation }) {
                   <TouchableOpacity
                     key={lang.id}
                     activeOpacity={0.75}
-                    style={[
-                      styles.languageRow,
-                      index !== LANGUAGES.length - 1 && styles.languageBorder,
-                    ]}
+                    style={[styles.languageRow, index !== LANGUAGES.length - 1 && styles.languageBorder]}
                     onPress={() => {
                       setSelectedLanguage(lang.label);
                       setShowLanguageExpanded(false);
@@ -286,21 +271,12 @@ export default function SettingsScreen({ navigation }) {
                     }}
                   >
                     {selected ? (
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={20}
-                        color={COLORS.cyan}
-                      />
+                      <Ionicons name="checkmark-circle" size={20} color={COLORS.cyan} />
                     ) : (
                       <View style={styles.languageEmptyIcon} />
                     )}
 
-                    <Text
-                      style={[
-                        styles.languageText,
-                        selected && styles.languageTextSelected,
-                      ]}
-                    >
+                    <Text style={[styles.languageText, selected && styles.languageTextSelected]}>
                       {lang.label}
                     </Text>
                   </TouchableOpacity>
@@ -320,9 +296,7 @@ export default function SettingsScreen({ navigation }) {
               setDarkModeEnabled(nextValue);
               Alert.alert(
                 'Dark Mode',
-                nextValue
-                  ? 'Dark mode enabled. Full theme coming soon.'
-                  : 'Dark mode disabled.'
+                nextValue ? 'Dark mode enabled. Full theme coming soon.' : 'Dark mode disabled.'
               );
             }}
             switchProps={switchProps}
@@ -335,9 +309,7 @@ export default function SettingsScreen({ navigation }) {
             subtitle="Get help or contact support"
             anim={helpAnim}
             rotateValue={rotate(helpAnim)}
-            onPress={() =>
-              animateToggle(helpAnim, showHelpExpanded, setShowHelpExpanded)
-            }
+            onPress={() => animateToggle(helpAnim, showHelpExpanded, setShowHelpExpanded)}
             borderBottom={!showHelpExpanded}
           />
 
@@ -351,16 +323,12 @@ export default function SettingsScreen({ navigation }) {
               <SupportOption
                 icon="mail"
                 title="Contact Support"
-                onPress={() =>
-                  Alert.alert('Contact', 'Email: support@primescout.co.za')
-                }
+                onPress={() => Alert.alert('Contact', 'Email: support@primescout.co.za')}
               />
               <SupportOption
                 icon="flag"
                 title="Report a Problem"
-                onPress={() =>
-                  Alert.alert('Report', 'Problem reporting coming soon.')
-                }
+                onPress={() => Alert.alert('Report', 'Problem reporting coming soon.')}
               />
             </View>
           )}
@@ -370,9 +338,7 @@ export default function SettingsScreen({ navigation }) {
             subtitle={`Version ${APP_VERSION}`}
             anim={aboutAnim}
             rotateValue={rotate(aboutAnim)}
-            onPress={() =>
-              animateToggle(aboutAnim, showAboutExpanded, setShowAboutExpanded)
-            }
+            onPress={() => animateToggle(aboutAnim, showAboutExpanded, setShowAboutExpanded)}
             borderBottom={false}
           />
 
@@ -381,10 +347,7 @@ export default function SettingsScreen({ navigation }) {
               <AboutItem label="App Name" value="PRIME SCOUT" />
               <AboutItem label="Version" value={APP_VERSION} />
               <AboutItem label="Build" value={APP_BUILD} />
-              <AboutItem
-                label="Platform"
-                value="South African Sports Talent Discovery"
-              />
+              <AboutItem label="Platform" value="South African Sports Talent Discovery" />
               <AboutItem label="Developer" value="Prime Scout Technologies" />
               <AboutItem label="Contact" value="hello@primescout.co.za" />
 
@@ -393,18 +356,14 @@ export default function SettingsScreen({ navigation }) {
               <View style={styles.legalRow}>
                 <TouchableOpacity
                   activeOpacity={0.75}
-                  onPress={() =>
-                    Alert.alert('Terms', 'Terms of Service coming soon.')
-                  }
+                  onPress={() => Alert.alert('Terms', 'Terms of Service coming soon.')}
                 >
                   <Text style={styles.legalText}>Terms of Service</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   activeOpacity={0.75}
-                  onPress={() =>
-                    Alert.alert('Privacy Policy', 'Privacy Policy coming soon.')
-                  }
+                  onPress={() => Alert.alert('Privacy Policy', 'Privacy Policy coming soon.')}
                 >
                   <Text style={styles.legalText}>Privacy Policy</Text>
                 </TouchableOpacity>
@@ -437,19 +396,13 @@ export default function SettingsScreen({ navigation }) {
         passwordForm={passwordForm}
         setPasswordForm={setPasswordForm}
         onSave={handlePasswordUpdate}
+        submitting={passwordSubmitting}
       />
     </SafeAreaView>
   );
 }
 
-function ExpandableRow({
-  title,
-  subtitle,
-  icon,
-  rotateValue,
-  onPress,
-  borderBottom = true,
-}) {
+function ExpandableRow({ title, subtitle, icon, rotateValue, onPress, borderBottom = true }) {
   return (
     <TouchableOpacity
       activeOpacity={0.75}
@@ -472,15 +425,7 @@ function ExpandableRow({
   );
 }
 
-function SettingsSwitchRow({
-  title,
-  subtitle,
-  icon,
-  value,
-  onValueChange,
-  switchProps,
-  isLast = false,
-}) {
+function SettingsSwitchRow({ title, subtitle, icon, value, onValueChange, switchProps, isLast = false }) {
   return (
     <View style={[styles.settingsRow, !isLast && styles.rowBorder]}>
       <View style={styles.iconCircle}>
@@ -512,11 +457,7 @@ function ToggleRow({ title, subtitle, value, onValueChange, switchProps }) {
 
 function ActionLink({ title, onPress }) {
   return (
-    <TouchableOpacity
-      activeOpacity={0.75}
-      style={styles.actionLink}
-      onPress={onPress}
-    >
+    <TouchableOpacity activeOpacity={0.75} style={styles.actionLink} onPress={onPress}>
       <Text style={styles.actionLinkText}>{title}</Text>
       <Feather name="chevron-right" size={16} color={COLORS.gray400} />
     </TouchableOpacity>
@@ -544,11 +485,7 @@ function SupportRow({ title, subtitle, rotateValue, onPress, borderBottom }) {
 
 function SupportOption({ icon, title, onPress }) {
   return (
-    <TouchableOpacity
-      activeOpacity={0.75}
-      style={styles.supportOption}
-      onPress={onPress}
-    >
+    <TouchableOpacity activeOpacity={0.75} style={styles.supportOption} onPress={onPress}>
       <Feather name={icon} size={18} color={COLORS.cyan} />
       <Text style={styles.supportOptionText}>{title}</Text>
     </TouchableOpacity>
@@ -577,19 +514,11 @@ function LogoutModal({ visible, onClose, onConfirm }) {
             Are you sure you want to log out of your PRIME SCOUT account?
           </Text>
 
-          <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.confirmLogoutButton}
-            onPress={onConfirm}
-          >
+          <TouchableOpacity activeOpacity={0.75} style={styles.confirmLogoutButton} onPress={onConfirm}>
             <Text style={styles.confirmLogoutText}>Log Out</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.cancelLogoutButton}
-            onPress={onClose}
-          >
+          <TouchableOpacity activeOpacity={0.75} style={styles.cancelLogoutButton} onPress={onClose}>
             <Text style={styles.cancelLogoutText}>Cancel</Text>
           </TouchableOpacity>
         </View>
@@ -598,34 +527,18 @@ function LogoutModal({ visible, onClose, onConfirm }) {
   );
 }
 
-function ChangePasswordModal({
-  visible,
-  onClose,
-  passwordForm,
-  setPasswordForm,
-  onSave,
-}) {
+function ChangePasswordModal({ visible, onClose, passwordForm, setPasswordForm, onSave, submitting }) {
   const updatePassword = (field, value) => {
-    setPasswordForm((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+    setPasswordForm((prev) => ({ ...prev, [field]: value }));
   };
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
-      <KeyboardAvoidingView
-        style={styles.modalBackdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
+      <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={styles.modalSheet}>
           <View style={styles.modalHandle} />
 
-          <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.modalCloseButton}
-            onPress={onClose}
-          >
+          <TouchableOpacity activeOpacity={0.75} style={styles.modalCloseButton} onPress={onClose}>
             <Feather name="x" size={20} color={COLORS.gray600} />
           </TouchableOpacity>
 
@@ -657,17 +570,18 @@ function ChangePasswordModal({
 
           <TouchableOpacity
             activeOpacity={0.75}
-            style={styles.updatePasswordButton}
+            style={[styles.updatePasswordButton, submitting && { opacity: 0.7 }]}
             onPress={onSave}
+            disabled={submitting}
           >
-            <Text style={styles.updatePasswordText}>Update Password</Text>
+            {submitting ? (
+              <ActivityIndicator color={COLORS.white} />
+            ) : (
+              <Text style={styles.updatePasswordText}>Update Password</Text>
+            )}
           </TouchableOpacity>
 
-          <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.cancelPasswordButton}
-            onPress={onClose}
-          >
+          <TouchableOpacity activeOpacity={0.75} style={styles.cancelPasswordButton} onPress={onClose}>
             <Text style={styles.cancelPasswordText}>Cancel</Text>
           </TouchableOpacity>
         </View>
@@ -694,10 +608,7 @@ function PasswordInput({ label, placeholder, value, onChangeText }) {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.gray50,
-  },
+  safeArea: { flex: 1, backgroundColor: COLORS.gray50 },
 
   header: {
     backgroundColor: COLORS.white,
@@ -708,38 +619,12 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
 
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 4,
-  },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 },
+  backButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { flex: 1, fontSize: 22, fontWeight: '700', color: COLORS.black },
+  headerSubtitle: { paddingLeft: 48, fontSize: 13, color: COLORS.gray600 },
 
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  headerTitle: {
-    flex: 1,
-    fontSize: 22,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
-
-  headerSubtitle: {
-    paddingLeft: 48,
-    fontSize: 13,
-    color: COLORS.gray600,
-  },
-
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 40,
-  },
+  scrollContent: { padding: 16, paddingBottom: 40 },
 
   card: {
     backgroundColor: COLORS.white,
@@ -755,24 +640,9 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
 
-  settingsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    gap: 14,
-  },
-
-  supportRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    gap: 14,
-  },
-
-  rowBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.gray100,
-  },
+  settingsRow: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
+  supportRow: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 14 },
+  rowBorder: { borderBottomWidth: 1, borderBottomColor: COLORS.gray100 },
 
   iconCircle: {
     width: 48,
@@ -783,21 +653,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  rowTextColumn: {
-    flex: 1,
-  },
-
-  rowTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
-
-  rowSubtitle: {
-    fontSize: 13,
-    color: COLORS.gray600,
-    marginTop: 2,
-  },
+  rowTextColumn: { flex: 1 },
+  rowTitle: { fontSize: 15, fontWeight: '700', color: COLORS.black },
+  rowSubtitle: { fontSize: 13, color: COLORS.gray600, marginTop: 2 },
 
   expandedPanel: {
     backgroundColor: COLORS.gray50,
@@ -807,32 +665,12 @@ const styles = StyleSheet.create({
     gap: 14,
   },
 
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  toggleRow: { flexDirection: 'row', alignItems: 'center' },
+  toggleTitle: { fontSize: 14, fontWeight: '600', color: COLORS.black },
+  toggleSubtitle: { fontSize: 12, color: COLORS.gray600, marginTop: 2 },
 
-  toggleTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.black,
-  },
-
-  toggleSubtitle: {
-    fontSize: 12,
-    color: COLORS.gray600,
-    marginTop: 2,
-  },
-
-  linkButton: {
-    marginTop: 2,
-  },
-
-  linkText: {
-    color: COLORS.cyan,
-    fontSize: 13,
-    fontWeight: '600',
-  },
+  linkButton: { marginTop: 2 },
+  linkText: { color: COLORS.cyan, fontSize: 13, fontWeight: '600' },
 
   actionLink: {
     flexDirection: 'row',
@@ -846,12 +684,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.gray200,
   },
 
-  actionLinkText: {
-    flex: 1,
-    fontSize: 14,
-    color: COLORS.gray700,
-    fontWeight: '500',
-  },
+  actionLinkText: { flex: 1, fontSize: 14, color: COLORS.gray700, fontWeight: '500' },
 
   languagePanel: {
     backgroundColor: COLORS.gray50,
@@ -860,89 +693,22 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
 
-  languageRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
+  languageRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, gap: 12 },
+  languageBorder: { borderBottomWidth: 1, borderBottomColor: COLORS.gray100 },
+  languageEmptyIcon: { width: 20, height: 20 },
+  languageText: { fontSize: 14, fontWeight: '400', color: COLORS.gray700 },
+  languageTextSelected: { fontWeight: '600', color: COLORS.cyan },
 
-  languageBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.gray100,
-  },
+  supportOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 10 },
+  supportOptionText: { fontSize: 14, color: COLORS.gray700 },
 
-  languageEmptyIcon: {
-    width: 20,
-    height: 20,
-  },
-
-  languageText: {
-    fontSize: 14,
-    fontWeight: '400',
-    color: COLORS.gray700,
-  },
-
-  languageTextSelected: {
-    fontWeight: '600',
-    color: COLORS.cyan,
-  },
-
-  supportOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    gap: 10,
-  },
-
-  supportOptionText: {
-    fontSize: 14,
-    color: COLORS.gray700,
-  },
-
-  aboutPanel: {
-    backgroundColor: COLORS.gray50,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.gray100,
-    padding: 16,
-  },
-
-  aboutItem: {
-    flexDirection: 'row',
-    paddingVertical: 6,
-  },
-
-  aboutKey: {
-    width: 90,
-    fontSize: 12,
-    color: COLORS.gray500,
-    fontWeight: '500',
-  },
-
-  aboutValue: {
-    flex: 1,
-    fontSize: 12,
-    color: COLORS.gray700,
-    fontWeight: '400',
-  },
-
-  aboutDivider: {
-    height: 1,
-    backgroundColor: COLORS.gray200,
-    marginVertical: 12,
-  },
-
-  legalRow: {
-    flexDirection: 'row',
-    gap: 16,
-  },
-
-  legalText: {
-    fontSize: 12,
-    color: COLORS.cyan,
-    fontWeight: '500',
-  },
+  aboutPanel: { backgroundColor: COLORS.gray50, borderTopWidth: 1, borderTopColor: COLORS.gray100, padding: 16 },
+  aboutItem: { flexDirection: 'row', paddingVertical: 6 },
+  aboutKey: { width: 90, fontSize: 12, color: COLORS.gray500, fontWeight: '500' },
+  aboutValue: { flex: 1, fontSize: 12, color: COLORS.gray700, fontWeight: '400' },
+  aboutDivider: { height: 1, backgroundColor: COLORS.gray200, marginVertical: 12 },
+  legalRow: { flexDirection: 'row', gap: 16 },
+  legalText: { fontSize: 12, color: COLORS.cyan, fontWeight: '500' },
 
   logoutCard: {
     backgroundColor: COLORS.white,
@@ -958,18 +724,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
 
-  logoutText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.red,
-    textAlign: 'center',
-  },
+  logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red, textAlign: 'center' },
 
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
 
   modalSheet: {
     backgroundColor: COLORS.white,
@@ -988,14 +745,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 
-  logoutModalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.black,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-
+  logoutModalTitle: { fontSize: 18, fontWeight: '700', color: COLORS.black, textAlign: 'center', marginBottom: 8 },
   logoutModalText: {
     fontSize: 14,
     color: COLORS.gray600,
@@ -1014,11 +764,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
-  confirmLogoutText: {
-    color: COLORS.white,
-    fontWeight: '600',
-    fontSize: 15,
-  },
+  confirmLogoutText: { color: COLORS.white, fontWeight: '600', fontSize: 15 },
 
   cancelLogoutButton: {
     width: '100%',
@@ -1029,11 +775,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  cancelLogoutText: {
-    color: COLORS.gray700,
-    fontWeight: '600',
-    fontSize: 15,
-  },
+  cancelLogoutText: { color: COLORS.gray700, fontWeight: '600', fontSize: 15 },
 
   modalCloseButton: {
     position: 'absolute',
@@ -1046,29 +788,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  passwordModalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 4,
-  },
+  passwordModalTitle: { fontSize: 18, fontWeight: '700', color: COLORS.black, marginBottom: 4 },
+  passwordModalSubtitle: { fontSize: 13, color: COLORS.gray500, marginBottom: 20 },
 
-  passwordModalSubtitle: {
-    fontSize: 13,
-    color: COLORS.gray500,
-    marginBottom: 20,
-  },
-
-  passwordField: {
-    marginBottom: 14,
-  },
-
-  passwordLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.gray700,
-    marginBottom: 6,
-  },
+  passwordField: { marginBottom: 14 },
+  passwordLabel: { fontSize: 13, fontWeight: '600', color: COLORS.gray700, marginBottom: 6 },
 
   passwordInput: {
     height: 46,
@@ -1090,22 +814,8 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
 
-  updatePasswordText: {
-    color: COLORS.white,
-    fontWeight: '600',
-    fontSize: 15,
-  },
+  updatePasswordText: { color: COLORS.white, fontWeight: '600', fontSize: 15 },
 
-  cancelPasswordButton: {
-    width: '100%',
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-
-  cancelPasswordText: {
-    fontSize: 14,
-    color: COLORS.gray500,
-  },
+  cancelPasswordButton: { width: '100%', height: 40, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  cancelPasswordText: { fontSize: 14, color: COLORS.gray500 },
 });

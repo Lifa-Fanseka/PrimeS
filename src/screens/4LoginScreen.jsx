@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,49 +8,40 @@ import {
   ScrollView,
   Image,
   Alert,
+  Platform,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { login } from '../api/auth';
+import LoadingScreen from '../components/LoadingScreen';
 
-const dummyUsers = [
-  {
-    email: 'athlete@primescout.com',
-    password: '123456',
-    role: 'Athlete',
-    name: 'Demo Athlete',
-  },
-  {
-    email: 'scout@primescout.com',
-    password: '123456',
-    role: 'Scout',
-    name: 'Demo Scout',
-  },
-  {
-    email: 'coach@primescout.com',
-    password: '123456',
-    role: 'Coach',
-    name: 'Demo Coach',
-  },
-  {
-    email: 'parent@primescout.com',
-    password: '123456',
-    role: 'Parent',
-    name: 'Demo Parent',
-  },
-];
+const REMEMBERED_EMAIL_KEY = 'rememberedEmail';
 
 export default function LoginScreen() {
   const navigation = useNavigation();
-
   const [form, setForm] = useState({
     email: '',
     password: '',
   });
-
   const [errors, setErrors] = useState({});
   const [focusedField, setFocusedField] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Pre-fill the email if it was remembered from a previous login.
+  useEffect(() => {
+    AsyncStorage.getItem(REMEMBERED_EMAIL_KEY).then((savedEmail) => {
+      if (savedEmail) {
+        setForm((prev) => ({ ...prev, email: savedEmail }));
+        setRememberMe(true);
+      }
+    });
+  }, []);
 
   const updateField = (field, value) => {
     setForm({ ...form, [field]: value });
@@ -59,61 +50,75 @@ export default function LoginScreen() {
 
   const validateForm = () => {
     const newErrors = {};
-
     if (!form.email.trim() || !form.email.includes('@')) {
       newErrors.email = 'Valid email is required';
     }
-
     if (!form.password.trim() || form.password.length < 6) {
       newErrors.password = 'Password must be at least 6 characters';
     }
-
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleLogin = () => {
+  const dashboardByRole = {
+    Athlete: 'AthleteDashboard',
+    Scout: 'ScoutDashboard',
+    Coach: 'CoachDashboard',
+    Parent: 'ParentDashboard',
+    LeagueAdmin: 'LeagueAdminDashboard',
+  };
+
+  const handleLogin = async () => {
     if (!validateForm()) return;
+    setSubmitting(true);
+    try {
+      const result = await login(form.email.trim(), form.password);
 
-    const user = dummyUsers.find(
-      (u) =>
-        u.email.toLowerCase() === form.email.toLowerCase().trim() &&
-        u.password === form.password
-    );
+      // Remember (or forget) the email based on the checkbox, after a
+      // successful login — never remember on a failed attempt.
+      if (rememberMe) {
+        await AsyncStorage.setItem(REMEMBERED_EMAIL_KEY, form.email.trim());
+      } else {
+        await AsyncStorage.removeItem(REMEMBERED_EMAIL_KEY);
+      }
 
-    if (!user) {
-      Alert.alert('Login Failed', 'Incorrect email or password');
-      return;
+      const targetScreen = dashboardByRole[result.role] ?? 'Startup';
+      navigation.reset({
+        index: 0,
+        routes: [{ name: targetScreen }],
+      });
+    } catch (err) {
+
+      console.log('LOGIN ERROR:', JSON.stringify({
+        message: err?.message,
+        status: err?.response?.status,
+        data: err?.response?.data,
+        code: err?.code,
+      }, null, 2));
+      
+      const status = err?.response?.status;
+      if (status === 401) {
+        Alert.alert('Login Failed', 'Incorrect email or password.');
+      } else if (status === 403) {
+        Alert.alert('Account Locked', err?.response?.data ?? 'Your account is not active yet.');
+      } else {
+        Alert.alert('Login Failed', 'Something went wrong. Please try again.');
+      }
+      
+
+    } finally {
+      setSubmitting(false);
     }
-
-   if (user.role === 'Athlete') {
-  navigation.navigate('AthleteDashboard', { user });
-} else if (user.role === 'Scout') {
-  navigation.navigate('ScoutDashboard', { user });
-} else if (user.role === 'Coach') {
-  navigation.navigate('CoachDashboard', { user });
-} else if (user.role === 'Parent') {
-  navigation.navigate('ParentDashboard', { user });
-}
-
-    // Later we will replace these with real dashboard screens
-    // Example:
-    // if (user.role === 'Athlete') navigation.navigate('AthleteDashboard', { user });
-    // if (user.role === 'Scout') navigation.navigate('ScoutDashboard', { user });
-    // if (user.role === 'Coach') navigation.navigate('CoachDashboard', { user });
-    // if (user.role === 'Parent') navigation.navigate('ParentDashboard', { user });
   };
 
   const renderInput = (
     label,
     field,
     placeholder,
-    keyboardType = 'default',
-    secureTextEntry = false
+    keyboardType = 'default'
   ) => (
     <View style={styles.fieldGroup}>
       <Text style={styles.label}>{label}</Text>
-
       <TextInput
         style={[
           styles.input,
@@ -125,97 +130,124 @@ export default function LoginScreen() {
         value={form[field]}
         onChangeText={(text) => updateField(field, text)}
         keyboardType={keyboardType}
-        secureTextEntry={secureTextEntry}
         autoCapitalize="none"
         onFocus={() => setFocusedField(field)}
         onBlur={() => setFocusedField('')}
       />
-
       {errors[field] ? (
         <Text style={styles.errorText}>{errors[field]}</Text>
       ) : null}
     </View>
   );
 
+  // Full-screen takeover while logging in — replaces the whole form,
+  // not just a spinner inside the button, so it reads as "loading into
+  // the app" rather than "the button is busy."
+  if (submitting) {
+    return <LoadingScreen label="Logging in..." />;
+  }
+
   return (
-    <LinearGradient
-      colors={['#FFFFFF', '#FFFFFF', 'rgba(6, 182, 212, 0.15)']}
-      locations={[0, 0.6, 1]}
-      style={styles.screen}
-    >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.logo}>PRIME SCOUT</Text>
-
-        <Image
-          source={{
-            uri: 'https://images.unsplash.com/photo-1579952363873-27f3bade9f55?q=80&w=1200&auto=format&fit=crop',
-          }}
-          style={styles.heroImage}
-        />
-
-        <Text style={styles.heading}>Welcome Back</Text>
-        <Text style={styles.subHeading}>
-          Log in to continue building your future
-        </Text>
-
-        {renderInput(
-          'Email',
-          'email',
-          'your.email@example.com',
-          'email-address'
-        )}
-
-        {renderInput(
-          'Password',
-          'password',
-          'Enter your password',
-          'default',
-          true
-        )}
-
-        <View style={styles.optionsRow}>
-          <Pressable
-            style={styles.rememberRow}
-            onPress={() => setRememberMe(!rememberMe)}
+    <View style={styles.screen}>
+      {/* Gradient fills the entire screen, including behind the notch/status bar */}
+      <LinearGradient
+        colors={['#FFFFFF', '#FFFFFF', 'rgba(6, 182, 212, 0.15)']}
+        locations={[0, 0.6, 1]}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+        >
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
-            <View
-              style={[
-                styles.checkbox,
-                rememberMe && styles.checkboxChecked,
-              ]}
-            >
-              {rememberMe && <Feather name="check" size={12} color="#FFFFFF" />}
+            <Text style={styles.logo}>PRIME SCOUT</Text>
+            <Image
+              source={{
+                uri: 'https://images.unsplash.com/photo-1579952363873-27f3bade9f55?q=80&w=1200&auto=format&fit=crop',
+              }}
+              style={styles.heroImage}
+            />
+            <Text style={styles.heading}>Welcome Back</Text>
+            <Text style={styles.subHeading}>
+              Log in to continue building your future
+            </Text>
+            {renderInput(
+              'Email',
+              'email',
+              'your.email@example.com',
+              'email-address'
+            )}
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.passwordWrapper}>
+                <TextInput
+                  style={[
+                    styles.input,
+                    styles.passwordInput,
+                    focusedField === 'password' && styles.inputFocused,
+                    errors.password && styles.inputError,
+                  ]}
+                  placeholder="Enter your password"
+                  placeholderTextColor="#9CA3AF"
+                  value={form.password}
+                  onChangeText={(text) => updateField('password', text)}
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  onFocus={() => setFocusedField('password')}
+                  onBlur={() => setFocusedField('')}
+                />
+                <Pressable style={styles.eyeButton} onPress={() => setShowPassword(!showPassword)} hitSlop={8}>
+                  <Feather name={showPassword ? 'eye-off' : 'eye'} size={19} color="#6B7280" />
+                </Pressable>
+              </View>
+              {errors.password ? <Text style={styles.errorText}>{errors.password}</Text> : null}
             </View>
 
-            <Text style={styles.rememberText}>Remember me</Text>
-          </Pressable>
-
-          <Pressable onPress={() => Alert.alert('Forgot Password', 'Coming soon')}>
-            <Text style={styles.forgotText}>Forgot Password?</Text>
-          </Pressable>
-        </View>
-
-        <Pressable
-          style={({ pressed }) => [
-            styles.loginButton,
-            pressed && styles.loginButtonPressed,
-          ]}
-          onPress={handleLogin}
-        >
-          <Text style={styles.loginButtonText}>Login</Text>
-        </Pressable>
-
-        <View style={styles.signUpRow}>
-          <Text style={styles.signUpText}>Don't have an account? </Text>
-
-          <Pressable onPress={() => navigation.navigate('SignUp')}>
-            <Text style={styles.signUpLink}>Sign Up</Text>
-          </Pressable>
-        </View>
-
-        
-      </ScrollView>
-    </LinearGradient>
+            <View style={styles.optionsRow}>
+              <Pressable
+                style={styles.rememberRow}
+                onPress={() => setRememberMe(!rememberMe)}
+              >
+                <View
+                  style={[
+                    styles.checkbox,
+                    rememberMe && styles.checkboxChecked,
+                  ]}
+                >
+                  {rememberMe && <Feather name="check" size={12} color="#FFFFFF" />}
+                </View>
+                <Text style={styles.rememberText}>Remember me</Text>
+              </Pressable>
+              <Pressable onPress={() => Alert.alert('Forgot Password', "This isn't available yet — please contact support if you're locked out.")}>
+                <Text style={styles.forgotText}>Forgot Password?</Text>
+              </Pressable>
+            </View>
+            <Pressable
+              style={({ pressed }) => [
+                styles.loginButton,
+                pressed && styles.loginButtonPressed,
+              ]}
+              onPress={handleLogin}
+            >
+              <Text style={styles.loginButtonText}>Login</Text>
+            </Pressable>
+            <View style={styles.signUpRow}>
+              <Text style={styles.signUpText}>Don't have an account? </Text>
+              <Pressable onPress={() => navigation.navigate('SignUp')}>
+                <Text style={styles.signUpLink}>Sign Up</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </View>
   );
 }
 
@@ -223,52 +255,51 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
   },
-
+  safeArea: {
+    flex: 1,
+  },
+  flex: {
+    flex: 1,
+  },
   scrollContent: {
-    paddingTop: 32,
-    paddingBottom: 32,
+    flexGrow: 1,
+    paddingTop: 24,
+    paddingBottom: 40,
     paddingHorizontal: 24,
   },
-
   logo: {
     fontSize: 24,
     fontWeight: '800',
     color: '#000000',
     marginBottom: 24,
   },
-
   heroImage: {
     width: '100%',
     height: 160,
     borderRadius: 16,
     marginBottom: 24,
   },
-
   heading: {
     fontSize: 30,
     fontWeight: '800',
     color: '#000000',
     marginBottom: 8,
   },
-
   subHeading: {
     fontSize: 15,
     fontWeight: '400',
     color: '#4B5563',
     marginBottom: 24,
   },
-
   fieldGroup: {
     marginBottom: 16,
   },
-
   label: {
     fontSize: 14,
     fontWeight: '600',
     color: '#000000',
     marginBottom: 8,
   },
-
   input: {
     width: '100%',
     height: 48,
@@ -280,7 +311,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#000000',
   },
-
   inputFocused: {
     borderColor: '#06B6D4',
     shadowColor: '#06B6D4',
@@ -289,29 +319,32 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-
   inputError: {
     borderColor: '#EF4444',
   },
-
   errorText: {
     fontSize: 12,
     color: '#EF4444',
     marginTop: 6,
   },
-
+  passwordWrapper: { position: 'relative', justifyContent: 'center' },
+  passwordInput: { paddingRight: 44 },
+  eyeButton: {
+    position: 'absolute',
+    right: 14,
+    height: 48,
+    justifyContent: 'center',
+  },
   optionsRow: {
     marginTop: -4,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-
   rememberRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-
   checkbox: {
     width: 16,
     height: 16,
@@ -322,23 +355,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 8,
   },
-
   checkboxChecked: {
     backgroundColor: '#06B6D4',
     borderColor: '#06B6D4',
   },
-
   rememberText: {
     fontSize: 14,
     color: '#4B5563',
   },
-
   forgotText: {
     fontSize: 14,
     fontWeight: '500',
     color: '#06B6D4',
   },
-
   loginButton: {
     width: '100%',
     height: 56,
@@ -348,54 +377,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 24,
   },
-
   loginButtonPressed: {
     backgroundColor: '#0891B2',
   },
-
   loginButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
   },
-
   signUpRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 24,
   },
-
   signUpText: {
     fontSize: 15,
     color: '#4B5563',
   },
-
   signUpLink: {
     fontSize: 15,
     fontWeight: '600',
     color: '#06B6D4',
-  },
-
-  demoBox: {
-    marginTop: 24,
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-
-  demoTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#000000',
-    marginBottom: 8,
-  },
-
-  demoText: {
-    fontSize: 13,
-    color: '#4B5563',
-    marginBottom: 4,
   },
 });

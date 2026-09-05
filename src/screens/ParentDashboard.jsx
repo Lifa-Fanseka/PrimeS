@@ -1,560 +1,575 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  SafeAreaView,
-  StatusBar,
-  StyleSheet,
-  Dimensions,
-  Platform,
-  Alert,
-  Animated,
+View,
+Text,
+ScrollView,
+TouchableOpacity,
+StatusBar,
+StyleSheet,
+Dimensions,
+Platform,
+Alert,
+ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import api from '../api/client';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const scale = SCREEN_WIDTH / 390;
 const responsive = size => Math.round(size * Math.min(scale, 1.18));
 
-const CHILD_PROFILE = {
-  name: 'Themba Nkosi',
-  sport: 'Football',
-  position: 'Midfielder',
-  location: 'Johannesburg, South Africa',
-  age: 16,
-  team: 'Johannesburg Youth Academy',
-  coachName: 'Coach Mbeki',
-  verified: true,
-  goals: 18,
-  assists: 12,
-  matches: 24,
-  rating: 8.5,
-  coverImage:
-    'https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=800&q=80',
-  profileImage:
-    'https://images.unsplash.com/photo-1578479161055-9d2d985e2de0?w=400&q=80',
-  about:
-    'Talented midfielder with exceptional ball control and passing accuracy. Currently playing for Johannesburg Youth Academy with strong prospects for professional advancement.',
-};
-
-const CONSENT_BADGE_COLORS = {
-  'Profile Access': {
-    bg: '#ECFEFF',
-    text: '#0891B2',
-    border: '#CFFAFE',
-  },
-  'Video Access': {
-    bg: '#F5F3FF',
-    text: '#7C3AED',
-    border: '#EDE9FE',
-  },
-  'Contact Information': {
-    bg: '#F0FDF4',
-    text: '#16A34A',
-    border: '#DCFCE7',
-  },
-};
-
+// No backend endpoint aggregates a parent-facing activity feed yet — stays static.
 const RECENT_ACTIVITY = [
-  {
-    id: 'act1',
-    icon: 'checkmark-circle',
-    iconColor: '#16A34A',
-    iconBg: '#F0FDF4',
-    text: "Coach Mbeki verified Themba's stats",
-    time: '2h ago',
-  },
-  {
-    id: 'act2',
-    icon: 'videocam-outline',
-    iconColor: '#7C3AED',
-    iconBg: '#F5F3FF',
-    text: 'Themba uploaded a new highlight video',
-    time: '1d ago',
-  },
-  {
-    id: 'act3',
-    icon: 'star-outline',
-    iconColor: '#D97706',
-    iconBg: '#FFFBEB',
-    text: 'New recruitment interest from Cape Town FC',
-    time: '3d ago',
-  },
-  {
-    id: 'act4',
-    icon: 'trophy-outline',
-    iconColor: '#0891B2',
-    iconBg: '#ECFEFF',
-    text: 'Johannesburg Youth Academy won 3-1 vs Durban FC',
-    time: '4d ago',
-  },
+{
+id: 'act1',
+icon: 'checkmark-circle',
+iconColor: '#16A34A',
+iconBg: '#F0FDF4',
+text: "Your coach verified your child's stats",
+time: 'Recently',
+},
+{
+id: 'act2',
+icon: 'shield-checkmark-outline',
+iconColor: '#0891B2',
+iconBg: '#ECFEFF',
+text: 'Consent requests are reviewed below',
+time: '',
+},
 ];
 
+function calculateAge(dateOfBirth) {
+if (!dateOfBirth) return null;
+const dob = new Date(dateOfBirth);
+const today = new Date();
+let age = today.getFullYear() - dob.getFullYear();
+const m = today.getMonth() - dob.getMonth();
+if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+return age;
+}
+
 function ChildProfileCard({ child, onViewProfile }) {
-  return (
-    <View style={styles.childCard}>
-      <View style={styles.childCardHeader}>
-        <Text style={styles.childCardTitle}>Your Child's Profile</Text>
-        {child.verified && (
-          <Ionicons name="checkmark-circle" size={20} color="#06B6D4" />
-        )}
-      </View>
+const initials = (child.name || '?')
+.split(' ')
+.map(part => part[0])
+.join('');
 
-      <View style={styles.childInfoRow}>
-        <LinearGradient
-          colors={['#06B6D4', '#3B82F6']}
-          style={styles.childAvatar}
-        >
-          <Text style={styles.childAvatarText}>
-            {child.name
-              .split(' ')
-              .map(part => part[0])
-              .join('')}
-          </Text>
-        </LinearGradient>
+return (
+<View style={styles.childCard}>
+<View style={styles.childCardHeader}>
+<Text style={styles.childCardTitle}>Your Child's Profile</Text>
+{child.verified && <Ionicons name="checkmark-circle" size={20} color="#06B6D4" />}
+</View>
 
-        <View style={styles.childInfo}>
-          <Text style={styles.childName}>{child.name}</Text>
+<View style={styles.childInfoRow}>
+<LinearGradient colors={['#06B6D4', '#3B82F6']} style={styles.childAvatar}>
+<Text style={styles.childAvatarText}>{initials}</Text>
+</LinearGradient>
 
-          <Text style={styles.childSport}>
-            {child.sport} • {child.position}
-          </Text>
+<View style={styles.childInfo}>
+<Text style={styles.childName}>{child.name}</Text>
 
-          <View style={styles.childLocationRow}>
-            <Ionicons name="location-outline" size={12} color="#6B7280" />
-            <Text style={styles.childLocation}>{child.location}</Text>
-          </View>
-        </View>
+<Text style={styles.childSport}>
+{child.sport ?? '—'} • {child.position ?? '—'}
+</Text>
 
-        <View style={styles.ageBadge}>
-          <Text style={styles.ageBadgeText}>Age {child.age}</Text>
-        </View>
-      </View>
+{child.region ? (
+<View style={styles.childLocationRow}>
+<Ionicons name="location-outline" size={12} color="#6B7280" />
+<Text style={styles.childLocation}>{child.region}</Text>
+</View>
+) : null}
+</View>
 
-      <View style={styles.teamRow}>
-        <View style={styles.teamInfoItem}>
-          <Ionicons name="people-outline" size={14} color="#6B7280" />
-          <Text style={styles.teamInfoText}>{child.team}</Text>
-        </View>
+{child.age != null && (
+<View style={styles.ageBadge}>
+<Text style={styles.ageBadgeText}>Age {child.age}</Text>
+</View>
+)}
+</View>
 
-        <View style={styles.teamInfoItem}>
-          <Ionicons name="person-outline" size={14} color="#6B7280" />
-          <Text style={styles.teamInfoText}>{child.coachName}</Text>
-        </View>
-      </View>
+<View style={styles.statsGrid}>
+{[
+{ value: child.totalGoals, label: 'Goals' },
+{ value: child.totalAssists, label: 'Assists' },
+{ value: child.matchesPlayed, label: 'Matches' },
+{ value: child.averageRating != null ? child.averageRating.toFixed(1) : '—', label: 'Rating' },
+].map((stat, index) => (
+<View key={index} style={styles.statBox}>
+<Text style={styles.statValue}>{stat.value}</Text>
+<Text style={styles.statLabel}>{stat.label}</Text>
+</View>
+))}
+</View>
 
-      <View style={styles.statsGrid}>
-        {[
-          { value: child.goals, label: 'Goals' },
-          { value: child.assists, label: 'Assists' },
-          { value: child.matches, label: 'Matches' },
-          { value: child.rating, label: 'Rating' },
-        ].map((stat, index) => (
-          <View key={index} style={styles.statBox}>
-            <Text style={styles.statValue}>{stat.value}</Text>
-            <Text style={styles.statLabel}>{stat.label}</Text>
-          </View>
-        ))}
-      </View>
-
-      <TouchableOpacity
-        style={styles.viewProfileBtn}
-        onPress={onViewProfile}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.viewProfileBtnText}>View Full Profile</Text>
-      </TouchableOpacity>
-    </View>
-  );
+<TouchableOpacity style={styles.viewProfileBtn} onPress={onViewProfile} activeOpacity={0.85}>
+<Text style={styles.viewProfileBtnText}>View Full Profile</Text>
+</TouchableOpacity>
+</View>
+);
 }
 
-function ConsentTypeBadge({ type }) {
-  const colors = CONSENT_BADGE_COLORS[type] ?? {
-    bg: '#F3F4F6',
-    text: '#374151',
-    border: '#E5E7EB',
-  };
+function ConsentRequestCard({ request, onApprove, onReject, submitting }) {
+const initials = (request.athleteName || '?')
+.split(' ')
+.map(part => part[0])
+.join('');
 
-  return (
-    <View
-      style={[
-        styles.consentBadge,
-        {
-          backgroundColor: colors.bg,
-          borderColor: colors.border,
-        },
-      ]}
-    >
-      <Text style={[styles.consentBadgeText, { color: colors.text }]}>
-        {type}
-      </Text>
-    </View>
-  );
+return (
+<View style={styles.consentCard}>
+<View style={styles.consentCardTop}>
+<View style={[styles.consentAvatar, { backgroundColor: '#06B6D4' }]}>
+<Text style={styles.consentAvatarText}>{initials}</Text>
+</View>
+
+<View style={styles.consentContent}>
+<View style={styles.consentNameRow}>
+<Text style={styles.consentName}>{request.athleteName}</Text>
+<Text style={styles.consentDate}>{request.dateSent?.slice(0, 10)}</Text>
+</View>
+
+<View style={[styles.consentBadge, { backgroundColor: '#ECFEFF', borderColor: '#CFFAFE' }]}>
+<Text style={[styles.consentBadgeText, { color: '#0891B2' }]}>Recruitment Consent</Text>
+</View>
+
+<Text style={styles.consentFrom}>
+<Text style={styles.consentFromLabel}>From: </Text>
+{request.scoutName}{request.scoutOrganization ? ` (${request.scoutOrganization})` : ''}
+</Text>
+
+{request.offerMessage ? <Text style={styles.consentDesc}>{request.offerMessage}</Text> : null}
+</View>
+</View>
+
+<View style={styles.consentActions}>
+<TouchableOpacity style={[styles.approveBtn, submitting && { opacity: 0.7 }]} onPress={onApprove} activeOpacity={0.85} disabled={submitting}>
+<Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
+<Text style={styles.approveBtnText}>Approve</Text>
+</TouchableOpacity>
+
+<TouchableOpacity style={[styles.rejectBtn, submitting && { opacity: 0.7 }]} onPress={onReject} activeOpacity={0.85} disabled={submitting}>
+<Ionicons name="close-circle-outline" size={18} color="#374151" />
+<Text style={styles.rejectBtnText}>Reject</Text>
+</TouchableOpacity>
+</View>
+</View>
+);
 }
 
-function ConsentRequestCard({ request, onApprove, onReject }) {
-  return (
-    <View style={styles.consentCard}>
-      <View style={styles.consentCardTop}>
-        <View
-          style={[
-            styles.consentAvatar,
-            { backgroundColor: request.avatarColor },
-          ]}
-        >
-          <Text style={styles.consentAvatarText}>{request.avatar}</Text>
-        </View>
+function SignupConsentCard({ request, onApprove, onReject, submitting }) {
+const initials = (request.athleteName || '?')
+.split(' ')
+.map(part => part[0])
+.join('');
 
-        <View style={styles.consentContent}>
-          <View style={styles.consentNameRow}>
-            <Text style={styles.consentName}>{request.name}</Text>
-            <Text style={styles.consentDate}>{request.date}</Text>
-          </View>
+return (
+<View style={styles.consentCard}>
+<View style={styles.consentCardTop}>
+<View style={[styles.consentAvatar, { backgroundColor: '#8B5CF6' }]}>
+<Text style={styles.consentAvatarText}>{initials}</Text>
+</View>
 
-          <ConsentTypeBadge type={request.type} />
+<View style={styles.consentContent}>
+<View style={styles.consentNameRow}>
+<Text style={styles.consentName}>{request.athleteName}</Text>
+<Text style={styles.consentDate}>{request.dateRequested?.slice(0, 10)}</Text>
+</View>
 
-          <Text style={styles.consentFrom}>
-            <Text style={styles.consentFromLabel}>From: </Text>
-            {request.from}
-          </Text>
+<View style={[styles.consentBadge, { backgroundColor: '#F5F3FF', borderColor: '#DDD6FE' }]}>
+<Text style={[styles.consentBadgeText, { color: '#7C3AED' }]}>New Account Request</Text>
+</View>
 
-          <Text style={styles.consentDesc}>{request.description}</Text>
-        </View>
-      </View>
+<Text style={styles.consentDesc}>
+{request.athleteName} wants to join PrimeScout and needs your consent to create their account.
+</Text>
+</View>
+</View>
 
-      <View style={styles.consentActions}>
-        <TouchableOpacity
-          style={styles.approveBtn}
-          onPress={onApprove}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
-          <Text style={styles.approveBtnText}>Approve</Text>
-        </TouchableOpacity>
+<View style={styles.consentActions}>
+<TouchableOpacity style={[styles.approveBtn, submitting && { opacity: 0.7 }]} onPress={onApprove} activeOpacity={0.85} disabled={submitting}>
+<Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
+<Text style={styles.approveBtnText}>Approve</Text>
+</TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.rejectBtn}
-          onPress={onReject}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="close-circle-outline" size={18} color="#374151" />
-          <Text style={styles.rejectBtnText}>Reject</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+<TouchableOpacity style={[styles.rejectBtn, submitting && { opacity: 0.7 }]} onPress={onReject} activeOpacity={0.85} disabled={submitting}>
+<Ionicons name="close-circle-outline" size={18} color="#374151" />
+<Text style={styles.rejectBtnText}>Reject</Text>
+</TouchableOpacity>
+</View>
+</View>
+);
 }
 
 function ActivityRow({ item }) {
-  return (
-    <View style={styles.activityRow}>
-      <View style={[styles.activityIcon, { backgroundColor: item.iconBg }]}>
-        <Ionicons name={item.icon} size={18} color={item.iconColor} />
-      </View>
+return (
+<View style={styles.activityRow}>
+<View style={[styles.activityIcon, { backgroundColor: item.iconBg }]}>
+<Ionicons name={item.icon} size={18} color={item.iconColor} />
+</View>
 
-      <View style={styles.activityInfo}>
-        <Text style={styles.activityText}>{item.text}</Text>
-        <Text style={styles.activityTime}>{item.time}</Text>
-      </View>
-    </View>
-  );
+<View style={styles.activityInfo}>
+<Text style={styles.activityText}>{item.text}</Text>
+{item.time ? <Text style={styles.activityTime}>{item.time}</Text> : null}
+</View>
+</View>
+);
 }
 
-export default function ParentDashboard({ onNavigate, onLogout }) {
-  const navigation = useNavigation();
+export default function ParentDashboard({ navigation: navProp }) {
+const navHook = useNavigation();
+const navigation = navProp || navHook;
 
-  const [activeTab, setActiveTab] = useState('home');
+const [activeTab, setActiveTab] = useState('home');
 
-  const [consentRequests, setConsentRequests] = useState([
-    {
-      id: '1',
-      name: 'Alex Johnson',
-      date: 'May 16, 2026',
-      type: 'Profile Access',
-      from: 'Manchester United Scout',
-      description:
-        'Wants to view full athletic profile and performance statistics',
-      avatar: 'AJ',
-      avatarColor: '#06B6D4',
-    },
-    {
-      id: '2',
-      name: 'Sarah Williams',
-      date: 'May 15, 2026',
-      type: 'Video Access',
-      from: 'Coach Martinez',
-      description: 'Requesting access to training videos and match highlights',
-      avatar: 'SW',
-      avatarColor: '#7C3AED',
-    },
-    {
-      id: '3',
-      name: 'Alex Johnson',
-      date: 'May 14, 2026',
-      type: 'Contact Information',
-      from: 'FC Barcelona Recruiter',
-      description: 'Wants to schedule an in-person evaluation meeting',
-      avatar: 'AJ',
-      avatarColor: '#16A34A',
-    },
-  ]);
+const [children, setChildren] = useState([]);
+const [selectedChildId, setSelectedChildId] = useState(null);
+const [selectedChild, setSelectedChild] = useState(null);
+const [consentRequests, setConsentRequests] = useState([]);
+const [respondingId, setRespondingId] = useState(null);
 
-  const goTo = (screen, params) => {
-    if (onNavigate) {
-      onNavigate(screen, params);
-    } else {
-      navigation.navigate(screen, params);
-    }
-  };
+const [signupRequests, setSignupRequests] = useState([]);
+const [respondingSignupId, setRespondingSignupId] = useState(null);
 
-  const handleApprove = id => {
-    Alert.alert(
-      'Approve Request',
-      'Are you sure you want to approve this consent request?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Approve',
-          style: 'default',
-          onPress: () => {
-            setConsentRequests(prev =>
-              prev.filter(request => request.id !== id)
-            );
-            Alert.alert('Approved', 'Consent request has been approved.');
-          },
-        },
-      ]
-    );
-  };
+const [loading, setLoading] = useState(true);
+const [loadingChild, setLoadingChild] = useState(false);
 
-  const handleReject = id => {
-    Alert.alert(
-      'Reject Request',
-      'Are you sure you want to reject this consent request?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Reject',
-          style: 'destructive',
-          onPress: () => {
-            setConsentRequests(prev =>
-              prev.filter(request => request.id !== id)
-            );
-            Alert.alert('Rejected', 'Consent request has been rejected.');
-          },
-        },
-      ]
-    );
-  };
+const goTo = (screen, params) => navigation.navigate(screen, params);
 
-  const handleTabPress = tab => {
-    setActiveTab(tab);
+const loadSignupRequests = useCallback(async () => {
+try {
+const res = await api.get('/api/Parent/signup-consent-requests');
+setSignupRequests(res.data);
+} catch (err) {
+console.error('Failed to load signup consent requests:', err);
+}
+}, []);
 
-    if (tab === 'messages') {
-      goTo('Messages');
-    }
+const loadChildren = useCallback(async () => {
+try {
+const res = await api.get('/api/Parent/children');
+setChildren(res.data);
 
-    if (tab === 'child') {
-      Alert.alert('Child Profile', 'Child profile screen is coming soon.');
-    }
-  };
+if (res.data.length > 0) {
+setSelectedChildId(res.data[0].athleteId);
+}
+} catch (err) {
+console.error('Failed to load children:', err);
+} finally {
+setLoading(false);
+}
+}, []);
 
-  const handleViewChildProfile = () => {
-    Alert.alert('Child Profile', 'Child profile screen is coming soon.');
-  };
+useEffect(() => {
+loadChildren();
+loadSignupRequests();
+}, [loadChildren, loadSignupRequests]);
 
-  const handleNotifications = () => {
-    goTo('Notifications');
-  };
+const loadChildDetails = useCallback(async (athleteId) => {
+setLoadingChild(true);
+try {
+const [summaryRes, athleteRes, consentRes] = await Promise.all([
+api.get(`/api/Parent/children/${athleteId}`),
+api.get(`/api/Athlete/GetAthleteById/${athleteId}`),
+api.get(`/api/Parent/children/${athleteId}/consent-requests`),
+]);
 
-  const handleSettings = () => {
-    goTo('Settings');
-  };
+setSelectedChild({
+...summaryRes.data,
+age: calculateAge(athleteRes.data.dateOfBirth),
+verified: athleteRes.data.verified,
+});
+setConsentRequests(consentRes.data);
+} catch (err) {
+console.error('Failed to load child details:', err);
+} finally {
+setLoadingChild(false);
+}
+}, []);
 
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+useEffect(() => {
+if (selectedChildId) {
+loadChildDetails(selectedChildId);
+}
+}, [selectedChildId, loadChildDetails]);
 
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>PRIME SCOUT</Text>
-          <Text style={styles.headerSubtitle}>Parent Dashboard</Text>
-        </View>
+const handleApprove = (offerId) => {
+Alert.alert('Approve Request', 'Are you sure you want to approve this consent request?', [
+{ text: 'Cancel', style: 'cancel' },
+{
+text: 'Approve',
+onPress: async () => {
+setRespondingId(offerId);
+try {
+await api.put(`/api/Parent/consent-requests/${offerId}`, { approve: true });
+setConsentRequests((prev) => prev.filter((r) => r.offerId !== offerId));
+Alert.alert('Approved', 'Consent request has been approved.');
+} catch (err) {
+Alert.alert('Error', 'Could not approve this request.');
+} finally {
+setRespondingId(null);
+}
+},
+},
+]);
+};
 
-        <View style={styles.headerIcons}>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={handleNotifications}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name="notifications-outline"
-              size={22}
-              color="#374151"
-            />
-            <View style={styles.badgeDot} />
-          </TouchableOpacity>
+const handleReject = (offerId) => {
+Alert.alert('Reject Request', 'Are you sure you want to reject this consent request?', [
+{ text: 'Cancel', style: 'cancel' },
+{
+text: 'Reject',
+style: 'destructive',
+onPress: async () => {
+setRespondingId(offerId);
+try {
+await api.put(`/api/Parent/consent-requests/${offerId}`, { approve: false });
+setConsentRequests((prev) => prev.filter((r) => r.offerId !== offerId));
+Alert.alert('Rejected', 'Consent request has been rejected.');
+} catch (err) {
+Alert.alert('Error', 'Could not reject this request.');
+} finally {
+setRespondingId(null);
+}
+},
+},
+]);
+};
 
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => handleTabPress('messages')}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name="chatbubble-ellipses-outline"
-              size={22}
-              color="#374151"
-            />
-            <View style={styles.badgeDot} />
-          </TouchableOpacity>
+const handleApproveSignup = (requestId) => {
+Alert.alert('Approve Account', 'Approve this new account request? Your child will be able to log in once approved.', [
+{ text: 'Cancel', style: 'cancel' },
+{
+text: 'Approve',
+onPress: async () => {
+setRespondingSignupId(requestId);
+try {
+await api.put(`/api/Parent/signup-consent-requests/${requestId}`, { approve: true });
+setSignupRequests((prev) => prev.filter((r) => r.requestId !== requestId));
+Alert.alert('Approved', "Your child's account has been approved.");
+loadChildren(); // the newly-approved athlete now shows up as a linked child
+} catch (err) {
+Alert.alert('Error', 'Could not approve this request.');
+} finally {
+setRespondingSignupId(null);
+}
+},
+},
+]);
+};
 
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={handleSettings}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="settings-outline" size={22} color="#374151" />
-          </TouchableOpacity>
-        </View>
-      </View>
+const handleRejectSignup = (requestId) => {
+Alert.alert('Reject Account', 'Are you sure you want to reject this account request?', [
+{ text: 'Cancel', style: 'cancel' },
+{
+text: 'Reject',
+style: 'destructive',
+onPress: async () => {
+setRespondingSignupId(requestId);
+try {
+await api.put(`/api/Parent/signup-consent-requests/${requestId}`, { approve: false });
+setSignupRequests((prev) => prev.filter((r) => r.requestId !== requestId));
+Alert.alert('Rejected', 'The account request has been rejected.');
+} catch (err) {
+Alert.alert('Error', 'Could not reject this request.');
+} finally {
+setRespondingSignupId(null);
+}
+},
+},
+]);
+};
 
-      <ScrollView
-        style={styles.scroll}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
-        <ChildProfileCard
-          child={CHILD_PROFILE}
-          onViewProfile={handleViewChildProfile}
-        />
+const handleTabPress = tab => {
+setActiveTab(tab);
+if (tab === 'messages') goTo('Messages');
+if (tab === 'me') goTo('Profile');
+};
 
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Consent Requests</Text>
+const handleViewChildProfile = () => {
+if (!selectedChild?.athleteId) return;
+navigation.navigate('PublicProfile', { type: 'Athlete', id: selectedChild.athleteId });
+};
 
-          {consentRequests.length > 0 && (
-            <View style={styles.pendingCountBadge}>
-              <Text style={styles.pendingCountText}>
-                {consentRequests.length} pending
-              </Text>
-            </View>
-          )}
-        </View>
+const handleNotifications = () => goTo('Notifications');
+const handleSettings = () => goTo('Settings');
 
-        {consentRequests.length === 0 ? (
-          <View style={styles.emptyConsent}>
-            <Ionicons name="checkmark-circle" size={52} color="#22C55E" />
+if (loading) {
+return (
+<SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
+<ActivityIndicator size="large" color="#06B6D4" />
+</SafeAreaView>
+);
+}
 
-            <Text style={styles.emptyConsentTitle}>
-              No pending consent requests
-            </Text>
+return (
+<SafeAreaView style={styles.safeArea}>
+<StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
 
-            <Text style={styles.emptyConsentSub}>You're all caught up!</Text>
-          </View>
-        ) : (
-          <View style={styles.consentList}>
-            {consentRequests.map(request => (
-              <ConsentRequestCard
-                key={request.id}
-                request={request}
-                onApprove={() => handleApprove(request.id)}
-                onReject={() => handleReject(request.id)}
-              />
-            ))}
-          </View>
-        )}
+<View style={styles.header}>
+<View>
+<Text style={styles.headerTitle}>PRIME SCOUT</Text>
+<Text style={styles.headerSubtitle}>Parent Dashboard</Text>
+</View>
 
-        <View style={styles.activitySection}>
-          <Text style={styles.sectionTitle}>Recent Activity</Text>
+<View style={styles.headerIcons}>
+<TouchableOpacity style={styles.iconBtn} onPress={handleNotifications} activeOpacity={0.7}>
+<Ionicons name="notifications-outline" size={22} color="#374151" />
+</TouchableOpacity>
 
-          <View style={styles.activityList}>
-            {RECENT_ACTIVITY.map(item => (
-              <ActivityRow key={item.id} item={item} />
-            ))}
-          </View>
-        </View>
+<TouchableOpacity style={styles.iconBtn} onPress={() => handleTabPress('messages')} activeOpacity={0.7}>
+<Ionicons name="chatbubble-ellipses-outline" size={22} color="#374151" />
+</TouchableOpacity>
 
-        <View style={styles.safetyCard}>
-          <View style={styles.safetyCardRow}>
-            <View style={styles.safetyIconCircle}>
-              <Ionicons name="shield-checkmark" size={22} color="#0891B2" />
-            </View>
+<TouchableOpacity style={styles.iconBtn} onPress={handleSettings} activeOpacity={0.7}>
+<Ionicons name="settings-outline" size={22} color="#374151" />
+</TouchableOpacity>
+</View>
+</View>
 
-            <View style={styles.safetyInfo}>
-              <Text style={styles.safetyTitle}>Your child is protected</Text>
+<ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
-              <Text style={styles.safetySub}>
-                All scout and coach interactions require your consent. You
-                control who can access Themba's profile.
-              </Text>
-            </View>
-          </View>
-        </View>
-      </ScrollView>
+{signupRequests.length > 0 && (
+<View style={{ marginBottom: responsive(20) }}>
+<View style={styles.sectionHeader}>
+<Text style={styles.sectionTitle}>New Account Requests</Text>
+<View style={styles.pendingCountBadge}>
+<Text style={styles.pendingCountText}>{signupRequests.length} pending</Text>
+</View>
+</View>
 
-      <View style={styles.bottomNav}>
-        {[
-          {
-            tab: 'home',
-            icon: 'home-outline',
-            iconActive: 'home',
-            label: 'Home',
-            badge: false,
-          },
-          {
-            tab: 'messages',
-            icon: 'chatbubble-ellipses-outline',
-            iconActive: 'chatbubble-ellipses',
-            label: 'Messages',
-            badge: true,
-          },
-          {
-            tab: 'child',
-            icon: 'person-outline',
-            iconActive: 'person',
-            label: 'Child',
-            badge: false,
-          },
-        ].map(item => (
-          <TouchableOpacity
-            key={item.tab}
-            style={styles.navTab}
-            onPress={() => handleTabPress(item.tab)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.navIconWrapper}>
-              <Ionicons
-                name={activeTab === item.tab ? item.iconActive : item.icon}
-                size={24}
-                color={activeTab === item.tab ? '#06B6D4' : '#6B7280'}
-              />
+<View style={styles.consentList}>
+{signupRequests.map(request => (
+<SignupConsentCard
+key={request.requestId}
+request={request}
+submitting={respondingSignupId === request.requestId}
+onApprove={() => handleApproveSignup(request.requestId)}
+onReject={() => handleRejectSignup(request.requestId)}
+/>
+))}
+</View>
+</View>
+)}
 
-              {item.badge && <View style={styles.navBadgeDot} />}
-            </View>
+{children.length === 0 ? (
+<View style={styles.emptyConsent}>
+<Ionicons name="person-add-outline" size={52} color="#9CA3AF" />
+<Text style={styles.emptyConsentTitle}>No linked children yet</Text>
+<Text style={styles.emptyConsentSub}>
+Once your child links their account to you, they'll appear here.
+</Text>
+</View>
+) : (
+<>
+{children.length > 1 && (
+<View style={{ flexDirection: 'row', gap: 8, marginBottom: responsive(16), flexWrap: 'wrap' }}>
+{children.map((c) => (
+<TouchableOpacity
+key={c.athleteId}
+onPress={() => setSelectedChildId(c.athleteId)}
+style={[
+styles.ageBadge,
+{ alignSelf: 'flex-start' },
+selectedChildId === c.athleteId && { backgroundColor: '#06B6D4' },
+]}
+>
+<Text style={[styles.ageBadgeText, selectedChildId === c.athleteId && { color: '#ffffff' }]}>
+{c.name}
+</Text>
+</TouchableOpacity>
+))}
+</View>
+)}
 
-            <Text
-              style={[
-                styles.navLabel,
-                activeTab === item.tab && styles.navLabelActive,
-              ]}
-            >
-              {item.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </SafeAreaView>
-  );
+{loadingChild || !selectedChild ? (
+<ActivityIndicator size="large" color="#06B6D4" style={{ marginVertical: 24 }} />
+) : (
+<>
+<ChildProfileCard child={selectedChild} onViewProfile={handleViewChildProfile} />
+
+<View style={styles.sectionHeader}>
+<Text style={styles.sectionTitle}>Consent Requests</Text>
+
+{consentRequests.length > 0 && (
+<View style={styles.pendingCountBadge}>
+<Text style={styles.pendingCountText}>{consentRequests.length} pending</Text>
+</View>
+)}
+</View>
+
+{consentRequests.length === 0 ? (
+<View style={styles.emptyConsent}>
+<Ionicons name="checkmark-circle" size={52} color="#22C55E" />
+<Text style={styles.emptyConsentTitle}>No pending consent requests</Text>
+<Text style={styles.emptyConsentSub}>You're all caught up!</Text>
+</View>
+) : (
+<View style={styles.consentList}>
+{consentRequests.map(request => (
+<ConsentRequestCard
+key={request.offerId}
+request={request}
+submitting={respondingId === request.offerId}
+onApprove={() => handleApprove(request.offerId)}
+onReject={() => handleReject(request.offerId)}
+/>
+))}
+</View>
+)}
+</>
+)}
+</>
+)}
+
+<View style={styles.activitySection}>
+<Text style={styles.sectionTitle}>Recent Activity</Text>
+
+<View style={styles.activityList}>
+{RECENT_ACTIVITY.map(item => (
+<ActivityRow key={item.id} item={item} />
+))}
+</View>
+</View>
+
+<View style={styles.safetyCard}>
+<View style={styles.safetyCardRow}>
+<View style={styles.safetyIconCircle}>
+<Ionicons name="shield-checkmark" size={22} color="#0891B2" />
+</View>
+
+<View style={styles.safetyInfo}>
+<Text style={styles.safetyTitle}>Your child is protected</Text>
+
+<Text style={styles.safetySub}>
+All scout recruitment offers require your consent before proceeding.
+</Text>
+</View>
+</View>
+</View>
+</ScrollView>
+
+<View style={styles.bottomNav}>
+{[
+{ tab: 'home', icon: 'home-outline', iconActive: 'home', label: 'Home', badge: false },
+{ tab: 'messages', icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', label: 'Messages', badge: false },
+{ tab: 'me', icon: 'person-outline', iconActive: 'person', label: 'Me', badge: false },
+].map(item => (
+<TouchableOpacity key={item.tab} style={styles.navTab} onPress={() => handleTabPress(item.tab)} activeOpacity={0.7}>
+<View style={styles.navIconWrapper}>
+<Ionicons name={activeTab === item.tab ? item.iconActive : item.icon} size={24} color={activeTab === item.tab ? '#06B6D4' : '#6B7280'} />
+{item.badge && <View style={styles.navBadgeDot} />}
+</View>
+
+<Text style={[styles.navLabel, activeTab === item.tab && styles.navLabelActive]}>{item.label}</Text>
+</TouchableOpacity>
+))}
+</View>
+</SafeAreaView>
+);
 }
 
 const styles = StyleSheet.create({

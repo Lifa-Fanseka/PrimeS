@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,11 +6,13 @@ import {
   FlatList,
   ScrollView,
   StyleSheet,
-  SafeAreaView,
   Animated,
-  Alert,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import api from '../api/client';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const COLORS = {
   cyan: '#06B6D4',
@@ -27,6 +29,8 @@ const COLORS = {
   gray600: '#4B5563',
   gray700: '#374151',
 
+  pinkBg: '#FDF2F8',
+  pinkIcon: '#EC4899',
   purpleBg: '#F3E8FF',
   purpleIcon: '#A855F7',
   cyanBg: '#ECFEFF',
@@ -37,146 +41,84 @@ const COLORS = {
   blueIcon: '#3B82F6',
   greenBg: '#F0FDF4',
   greenIcon: '#22C55E',
-  yellowBg: '#FEFCE8',
-  yellowIcon: '#CA8A04',
+  grayBg: '#F3F4F6',
+  grayIcon: '#6B7280',
   redDot: '#EF4444',
 };
 
+// Maps directly to the "Type" strings the backend actually creates
+// (see NotificationService.CreateAsync calls across MediaController,
+// StatisticsController, MatchController, ChatHub, ParentController).
 const TYPE_CONFIG = {
-  scouting: {
-    iconName: 'user-plus',
-    bg: COLORS.purpleBg,
-    color: COLORS.purpleIcon,
-    label: 'Scouting',
-  },
-  profile_view: {
-    iconName: 'eye',
-    bg: COLORS.cyanBg,
-    color: COLORS.cyanIcon,
-    label: 'Profile',
-  },
-  match_update: {
-    iconName: 'calendar',
-    bg: COLORS.orangeBg,
-    color: COLORS.orangeIcon,
-    label: 'Match',
-  },
-  message: {
-    iconName: 'message-circle',
-    bg: COLORS.blueBg,
-    color: COLORS.blueIcon,
-    label: 'Message',
-  },
-  stats_verified: {
-    iconName: 'check-circle',
-    bg: COLORS.greenBg,
-    color: COLORS.greenIcon,
-    label: 'Stats',
-  },
-  reminder: {
-    iconName: 'bell',
-    bg: COLORS.yellowBg,
-    color: COLORS.yellowIcon,
-    label: 'Reminder',
-  },
+  Like: { iconName: 'heart', bg: COLORS.pinkBg, color: COLORS.pinkIcon, label: 'Likes' },
+  Comment: { iconName: 'message-square', bg: COLORS.blueBg, color: COLORS.blueIcon, label: 'Comments' },
+  MediaVerification: { iconName: 'video', bg: COLORS.purpleBg, color: COLORS.purpleIcon, label: 'Media' },
+  StatsVerification: { iconName: 'check-circle', bg: COLORS.greenBg, color: COLORS.greenIcon, label: 'Stats' },
+  MatchResult: { iconName: 'calendar', bg: COLORS.orangeBg, color: COLORS.orangeIcon, label: 'Matches' },
+  Message: { iconName: 'message-circle', bg: COLORS.blueBg, color: COLORS.blueIcon, label: 'Messages' },
+  ConsentResponse: { iconName: 'shield', bg: COLORS.cyanBg, color: COLORS.cyanIcon, label: 'Consent' },
 };
 
-const INITIAL_NOTIFICATIONS = [
-  {
-    id: '1',
-    type: 'scouting',
-    title: 'Scouting Request',
-    description:
-      'Manchester United Scout wants to view your full athletic profile and performance statistics',
-    time: '2 minutes ago',
-    unread: true,
-    actionScreen: 'AthleteProfile',
-  },
-  {
-    id: '2',
-    type: 'profile_view',
-    title: 'Scout Viewed Profile',
-    description: 'Michael Rodriguez from FC Barcelona viewed your profile',
-    time: '5 minutes ago',
-    unread: true,
-    actionScreen: 'AthleteProfile',
-  },
-  {
-    id: '3',
-    type: 'match_update',
-    title: 'Match Update',
-    description:
-      'Your upcoming match vs Johannesburg FC has been rescheduled to May 20, 2026 at 15:00',
-    time: '30 minutes ago',
-    unread: true,
-    actionScreen: null,
-  },
-  {
-    id: '4',
-    type: 'message',
-    title: 'New Message',
-    description: 'You have a new message from Coach Martinez',
-    time: '1 hour ago',
-    unread: true,
-    actionScreen: 'Messages',
-  },
-  {
-    id: '5',
-    type: 'match_update',
-    title: 'Match Result Posted',
-    description: 'Coach Martinez posted match results: Won 3-1 vs Cape Town United',
-    time: '2 hours ago',
-    unread: false,
-    actionScreen: null,
-  },
-  {
-    id: '6',
-    type: 'stats_verified',
-    title: 'Stats Verified',
-    description:
-      'Your match statistics from May 10 have been verified by Coach Martinez',
-    time: '3 hours ago',
-    unread: false,
-    actionScreen: null,
-  },
-  {
-    id: '7',
-    type: 'reminder',
-    title: 'Training Session Reminder',
-    description: 'Training session tomorrow at 14:00 - Stadium Field A',
-    time: '5 hours ago',
-    unread: false,
-    actionScreen: null,
-  },
-  {
-    id: '8',
-    type: 'scouting',
-    title: 'Recruitment Offer',
-    description:
-      'You have received a recruitment offer from FC Barcelona Recruiter. Parental consent required.',
-    time: '1 day ago',
-    unread: false,
-    actionScreen: 'AthleteProfile',
-  },
-];
+const DEFAULT_TYPE_CONFIG = {
+  iconName: 'bell',
+  bg: COLORS.grayBg,
+  color: COLORS.grayIcon,
+  label: 'Other',
+};
 
-const FILTER_TABS = ['All', 'Unread', 'Scouting', 'Match', 'Message', 'Reminder'];
+const FILTER_TABS = ['All', 'Unread', 'Likes', 'Comments', 'Stats', 'Matches', 'Messages', 'Consent'];
+
+function formatTimeAgo(dateString) {
+  if (!dateString) return '';
+  const diffMs = Date.now() - new Date(dateString).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 export default function NotificationsScreen({ navigation }) {
-  const [notifications, setNotifications] = useState(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState([]);
   const [activeFilter, setActiveFilter] = useState('All');
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const animatedValues = useRef({});
 
-  const unreadCount = useMemo(() => {
-    return notifications.filter((n) => n.unread).length;
-  }, [notifications]);
+  const loadNotifications = useCallback(async () => {
+    try {
+      const res = await api.get('/api/Notification/me');
+      setNotifications(res.data);
+    } catch (err) {
+      console.error('Failed to load notifications:', err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadNotifications();
+  }, [loadNotifications]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadNotifications();
+  };
+
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => !n.isRead).length,
+    [notifications]
+  );
 
   const filteredNotifications = useMemo(() => {
     return notifications.filter((n) => {
       if (activeFilter === 'All') return true;
-      if (activeFilter === 'Unread') return n.unread;
-      return TYPE_CONFIG[n.type]?.label === activeFilter;
+      if (activeFilter === 'Unread') return !n.isRead;
+      const config = TYPE_CONFIG[n.type] || DEFAULT_TYPE_CONFIG;
+      return config.label === activeFilter;
     });
   }, [notifications, activeFilter]);
 
@@ -184,47 +126,63 @@ export default function NotificationsScreen({ navigation }) {
     if (!animatedValues.current[id]) {
       animatedValues.current[id] = new Animated.Value(1);
     }
-
     return animatedValues.current[id];
   };
 
-  const handleView = (id) => {
-    const notif = notifications.find((n) => n.id === id);
-
+  const handleView = async (notif) => {
     setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, unread: false } : n))
+      prev.map((n) => (n.notificationId === notif.notificationId ? { ...n, isRead: true } : n))
     );
 
-    if (notif?.actionScreen === 'Messages') {
-      navigation.navigate('Messages');
-      return;
+    try {
+      await api.put(`/api/Notification/${notif.notificationId}/read`);
+    } catch (err) {
+      console.error('Failed to mark as read:', err);
     }
 
-    if (notif?.actionScreen === 'AthleteProfile') {
-      Alert.alert('Coming Soon', 'Athlete profile screen is not created yet.');
-      return;
+    // Only "Message" notifications have a real screen to deep-link into right now.
+    // RelatedId on a Message notification is the sender's UserId (see ChatHub.SendMessage).
+    if (notif.type === 'Message' && notif.relatedId) {
+      navigation.navigate('Messages', { recipientId: notif.relatedId });
     }
   };
 
-  const handleDismiss = (id) => {
-    const anim = getAnimValue(id);
+  const handleDismiss = (notif) => {
+    const anim = getAnimValue(notif.notificationId);
 
     Animated.timing(anim, {
       toValue: 0,
       duration: 250,
       useNativeDriver: true,
-    }).start(() => {
-      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    }).start(async () => {
+      setNotifications((prev) => prev.filter((n) => n.notificationId !== notif.notificationId));
+      try {
+        await api.delete(`/api/Notification/${notif.notificationId}`);
+      } catch (err) {
+        console.error('Failed to dismiss notification:', err);
+      }
     });
   };
 
-  const handleMarkAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })));
+  const handleMarkAllRead = async () => {
+    const unread = notifications.filter((n) => !n.isRead);
+    if (unread.length === 0) return;
+
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+
+    try {
+      // No bulk "mark all read" endpoint exists yet — loop individual calls.
+      await Promise.all(
+        unread.map((n) => api.put(`/api/Notification/${n.notificationId}/read`))
+      );
+    } catch (err) {
+      console.error('Failed to mark all as read:', err);
+    }
   };
 
   const renderItem = useCallback(
     ({ item }) => {
-      const anim = getAnimValue(item.id);
+      const anim = getAnimValue(item.notificationId);
 
       return (
         <Animated.View
@@ -242,14 +200,22 @@ export default function NotificationsScreen({ navigation }) {
         >
           <NotificationCard
             notification={item}
-            onView={() => handleView(item.id)}
-            onDismiss={() => handleDismiss(item.id)}
+            onView={() => handleView(item)}
+            onDismiss={() => handleDismiss(item)}
           />
         </Animated.View>
       );
     },
     [notifications]
   );
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.safeArea, styles.centerLoading]}>
+        <ActivityIndicator size="large" color={COLORS.cyan} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -301,17 +267,10 @@ export default function NotificationsScreen({ navigation }) {
                 style={[styles.tabChip, active && styles.tabChipActive]}
                 onPress={() => setActiveFilter(tab)}
               >
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>
-                  {tab}
-                </Text>
+                <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab}</Text>
 
                 {showUnreadBadge && (
-                  <View
-                    style={[
-                      styles.unreadTabBadge,
-                      active && styles.unreadTabBadgeActive,
-                    ]}
-                  >
+                  <View style={[styles.unreadTabBadge, active && styles.unreadTabBadgeActive]}>
                     <Text
                       style={[
                         styles.unreadTabBadgeText,
@@ -330,10 +289,11 @@ export default function NotificationsScreen({ navigation }) {
 
       <FlatList
         data={filteredNotifications}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => String(item.notificationId)}
         renderItem={renderItem}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListEmptyComponent={<EmptyState activeFilter={activeFilter} />}
       />
     </SafeAreaView>
@@ -341,12 +301,13 @@ export default function NotificationsScreen({ navigation }) {
 }
 
 function NotificationCard({ notification, onView, onDismiss }) {
-  const config = TYPE_CONFIG[notification.type] || TYPE_CONFIG.message;
+  const config = TYPE_CONFIG[notification.type] || DEFAULT_TYPE_CONFIG;
+  const unread = !notification.isRead;
 
   return (
     <View style={styles.card}>
-      {notification.unread && <View style={styles.leftAccent} />}
-      {notification.unread && <View style={styles.unreadDot} />}
+      {unread && <View style={styles.leftAccent} />}
+      {unread && <View style={styles.unreadDot} />}
 
       <View style={styles.cardContent}>
         <View style={styles.topRow}>
@@ -359,32 +320,20 @@ function NotificationCard({ notification, onView, onDismiss }) {
               {notification.title}
             </Text>
 
-            <Text
-              numberOfLines={3}
-              ellipsizeMode="tail"
-              style={styles.description}
-            >
-              {notification.description}
+            <Text numberOfLines={3} ellipsizeMode="tail" style={styles.description}>
+              {notification.message}
             </Text>
 
-            <Text style={styles.timeText}>{notification.time}</Text>
+            <Text style={styles.timeText}>{formatTimeAgo(notification.dateCreated)}</Text>
           </View>
         </View>
 
         <View style={styles.actionRow}>
-          <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.viewButton}
-            onPress={onView}
-          >
+          <TouchableOpacity activeOpacity={0.75} style={styles.viewButton} onPress={onView}>
             <Text style={styles.viewButtonText}>View</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.dismissButton}
-            onPress={onDismiss}
-          >
+          <TouchableOpacity activeOpacity={0.75} style={styles.dismissButton} onPress={onDismiss}>
             <Feather name="x" size={14} color={COLORS.gray500} />
             <Text style={styles.dismissText}>Dismiss</Text>
           </TouchableOpacity>
@@ -398,9 +347,7 @@ function EmptyState({ activeFilter }) {
   return (
     <View style={styles.emptyState}>
       <Feather name="bell-off" size={48} color={COLORS.gray300} />
-
       <Text style={styles.emptyTitle}>No notifications</Text>
-
       <Text style={styles.emptyText}>
         {activeFilter === 'Unread'
           ? "You're all caught up!"
@@ -411,10 +358,8 @@ function EmptyState({ activeFilter }) {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.gray50,
-  },
+  safeArea: { flex: 1, backgroundColor: COLORS.gray50 },
+  centerLoading: { alignItems: 'center', justifyContent: 'center' },
 
   header: {
     backgroundColor: COLORS.white,
@@ -425,12 +370,7 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
 
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 8,
-  },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
 
   backButton: {
     width: 36,
@@ -440,37 +380,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  headerTitle: {
-    flex: 1,
-    fontSize: 22,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
+  headerTitle: { flex: 1, fontSize: 22, fontWeight: '700', color: COLORS.black },
 
-  summaryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-
-  summaryText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-
-  unreadSummary: {
-    color: COLORS.cyan,
-  },
-
-  caughtUpSummary: {
-    color: COLORS.gray400,
-  },
-
-  markReadText: {
-    fontSize: 13,
-    color: COLORS.gray500,
-    fontWeight: '500',
-  },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  summaryText: { fontSize: 13, fontWeight: '600' },
+  unreadSummary: { color: COLORS.cyan },
+  caughtUpSummary: { color: COLORS.gray400 },
+  markReadText: { fontSize: 13, color: COLORS.gray500, fontWeight: '500' },
 
   tabsContainer: {
     backgroundColor: COLORS.white,
@@ -478,10 +394,7 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.gray200,
   },
 
-  tabsContent: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
+  tabsContent: { paddingHorizontal: 12, paddingVertical: 10 },
 
   tabChip: {
     flexDirection: 'row',
@@ -493,20 +406,9 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
 
-  tabChipActive: {
-    backgroundColor: COLORS.cyan,
-  },
-
-  tabText: {
-    fontSize: 13,
-    color: COLORS.gray600,
-    fontWeight: '500',
-  },
-
-  tabTextActive: {
-    color: COLORS.white,
-    fontWeight: '600',
-  },
+  tabChipActive: { backgroundColor: COLORS.cyan },
+  tabText: { fontSize: 13, color: COLORS.gray600, fontWeight: '500' },
+  tabTextActive: { color: COLORS.white, fontWeight: '600' },
 
   unreadTabBadge: {
     width: 16,
@@ -518,25 +420,11 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
 
-  unreadTabBadgeActive: {
-    backgroundColor: COLORS.white,
-  },
+  unreadTabBadgeActive: { backgroundColor: COLORS.white },
+  unreadTabBadgeText: { fontSize: 9, fontWeight: '700', color: COLORS.white },
+  unreadTabBadgeTextActive: { color: COLORS.cyan },
 
-  unreadTabBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: COLORS.white,
-  },
-
-  unreadTabBadgeTextActive: {
-    color: COLORS.cyan,
-  },
-
-  listContent: {
-    paddingTop: 12,
-    paddingBottom: 32,
-    flexGrow: 1,
-  },
+  listContent: { paddingTop: 12, paddingBottom: 32, flexGrow: 1 },
 
   card: {
     backgroundColor: COLORS.white,
@@ -575,16 +463,8 @@ const styles = StyleSheet.create({
     zIndex: 5,
   },
 
-  cardContent: {
-    padding: 14,
-  },
-
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    marginBottom: 12,
-  },
+  cardContent: { padding: 14 },
+  topRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 12 },
 
   iconCircle: {
     width: 48,
@@ -594,36 +474,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  textColumn: {
-    flex: 1,
-    paddingRight: 10,
-  },
+  textColumn: { flex: 1, paddingRight: 10 },
+  cardTitle: { fontSize: 14, fontWeight: '700', color: COLORS.black, marginBottom: 4 },
+  description: { fontSize: 13, color: COLORS.gray700, lineHeight: 19, marginBottom: 6 },
+  timeText: { fontSize: 11, color: COLORS.gray400, fontWeight: '400' },
 
-  cardTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 4,
-  },
-
-  description: {
-    fontSize: 13,
-    color: COLORS.gray700,
-    lineHeight: 19,
-    marginBottom: 6,
-  },
-
-  timeText: {
-    fontSize: 11,
-    color: COLORS.gray400,
-    fontWeight: '400',
-  },
-
-  actionRow: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
+  actionRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
 
   viewButton: {
     flex: 1,
@@ -634,11 +490,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  viewButtonText: {
-    color: COLORS.white,
-    fontSize: 13,
-    fontWeight: '600',
-  },
+  viewButtonText: { color: COLORS.white, fontSize: 13, fontWeight: '600' },
 
   dismissButton: {
     flexDirection: 'row',
@@ -649,26 +501,10 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
 
-  dismissText: {
-    fontSize: 13,
-    color: COLORS.gray600,
-    fontWeight: '500',
-  },
+  dismissText: { fontSize: 13, color: COLORS.gray600, fontWeight: '500' },
 
-  emptyState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 64,
-  },
-
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.gray500,
-    marginTop: 12,
-  },
-
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 64 },
+  emptyTitle: { fontSize: 16, fontWeight: '600', color: COLORS.gray500, marginTop: 12 },
   emptyText: {
     fontSize: 13,
     color: COLORS.gray400,

@@ -1,27 +1,25 @@
-import React, { useMemo, useCallback, useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  SafeAreaView,
-  KeyboardAvoidingView,
-  Platform,
   FlatList,
   ScrollView,
   Image,
-  LayoutAnimation,
-  UIManager,
+  Alert,
+  ActivityIndicator,
+  Dimensions,
 } from 'react-native';
-import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import api from '../api/client';
 
 const COLORS = {
   cyan: '#06B6D4',
-  cyanDark: '#0891B2',
-  cyanLight: '#ECFEFF',
-  cyanBorder: '#CFFAFE',
   black: '#000000',
   white: '#FFFFFF',
   gray50: '#F9FAFB',
@@ -30,854 +28,481 @@ const COLORS = {
   gray300: '#D1D5DB',
   gray400: '#9CA3AF',
   gray500: '#6B7280',
-  gray600: '#4B5563',
   gray700: '#374151',
-  red: '#EF4444',
-  yellow: '#FACC15',
 };
 
-const athletes = [
-  {
-    id: '1',
-    name: 'Jordan Martinez',
-    sport: 'Basketball',
-    position: 'Point Guard',
-    location: 'Los Angeles, California',
-    image: 'https://images.unsplash.com/photo-1578479161055-9d2d985e2de0?w=400',
-    coverImage: 'https://images.unsplash.com/photo-1546519638-68e109498ffc?w=1080',
-    verified: true,
-    goals: 34,
-    assists: 18,
-    matches: 52,
-    rating: 8.7,
-    age: 19,
-    about: 'Experienced point guard with exceptional court vision and leadership skills. Three-time league champion.',
-    team: 'Lakers Youth FC',
-  },
-  {
-    id: '2',
-    name: 'Alex Chen',
-    sport: 'Track & Field',
-    position: 'Sprinter',
-    location: 'Chicago, Illinois',
-    image: 'https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=400',
-    coverImage: 'https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=1080',
-    verified: true,
-    goals: 28,
-    assists: 12,
-    matches: 45,
-    rating: 8.9,
-    age: 16,
-    about: 'Elite sprinter specializing in 100m and 200m. Regional champion with nationally ranked personal bests.',
-    team: 'Youth Academy FC',
-  },
-  {
-    id: '3',
-    name: 'Thabo Mkhize',
-    sport: 'Football',
-    position: 'Striker',
-    location: 'Cape Town, South Africa',
-    image: 'https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=400',
-    coverImage: 'https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=1080',
-    verified: true,
-    goals: 42,
-    assists: 15,
-    matches: 38,
-    rating: 9.2,
-    age: 17,
-    about: 'Dynamic striker with exceptional finishing ability. Top scorer in the regional league.',
-    team: 'Cape Town United',
-  },
-];
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const scale = SCREEN_WIDTH / 390;
+const responsive = (size) => Math.round(size * Math.min(Math.max(scale, 0.85), 1.18));
 
-const sports = ['All', 'Basketball', 'Football', 'Track & Field', 'Rugby', 'Cricket'];
+const TYPE_TABS = ['All', 'Athletes', 'Coaches', 'Scouts'];
+const SPORTS = ['Soccer'];
 
 export default function SearchScreen({ navigation }) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSport, setSelectedSport] = useState('All');
-  const [showFilters, setShowFilters] = useState(false);
-  const [savedAthletes, setSavedAthletes] = useState(new Set());
-  const [focusedField, setFocusedField] = useState('');
+  const insets = useSafeAreaInsets();
 
-  const [filters, setFilters] = useState({
-    position: '',
-    ageMin: '',
-    ageMax: '',
-    region: '',
-    ratingMin: '',
-  });
+  const [myUserId, setMyUserId] = useState(null);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeType, setActiveType] = useState('All');
+  const [selectedSport, setSelectedSport] = useState('Soccer');
+
+  const [hasSearched, setHasSearched] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState([]);
+  const [followingIds, setFollowingIds] = useState(new Set());
+
+  // Cache the raw lists once fetched, so re-typing doesn't re-hit the API every keystroke.
+  const dataCache = useRef(null);
 
   useEffect(() => {
-    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-      UIManager.setLayoutAnimationEnabledExperimental(true);
-    }
+    (async () => {
+      const idStr = await AsyncStorage.getItem('userId');
+      setMyUserId(idStr ? parseInt(idStr, 10) : null);
+    })();
   }, []);
 
-  const toggleFilters = () => {
-    LayoutAnimation.easeInEaseOut();
-    setShowFilters(!showFilters);
-  };
+  // Debounced search — only fetches/shows anything once the user actually types.
+  useEffect(() => {
+    const query = searchQuery.trim();
 
-  const updateFilter = (field, value) => {
-    setFilters((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-  };
+    if (!query) {
+      setResults([]);
+      setHasSearched(false);
+      return;
+    }
 
-  const clearFilters = () => {
-    setFilters({
-      position: '',
-      ageMin: '',
-      ageMax: '',
-      region: '',
-      ratingMin: '',
-    });
-  };
+    const timeout = setTimeout(() => {
+      runSearch(query);
+    }, 400);
 
-  const toggleSave = (id) => {
-    setSavedAthletes((prev) => {
-      const updated = new Set(prev);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, activeType, selectedSport]);
 
-      if (updated.has(id)) {
-        updated.delete(id);
-      } else {
-        updated.add(id);
+  const runSearch = async (query) => {
+    setLoading(true);
+    setHasSearched(true);
+
+    try {
+      if (!dataCache.current) {
+        const [athletesRes, coachesRes, scoutsRes, followingRes] = await Promise.all([
+          api.get('/api/Athlete/GetAllAthletes'),
+          api.get('/api/Coach/GetAllCoach'),
+          api.get('/api/Scout'),
+          api.get('/api/User/Getfollowing'),
+        ]);
+
+        dataCache.current = {
+          athletes: athletesRes.data.map((a) => ({ ...a, _type: 'Athlete' })),
+          coaches: coachesRes.data.map((c) => ({ ...c, _type: 'Coach' })),
+          scouts: scoutsRes.data.map((s) => ({ ...s, _type: 'Scout' })),
+        };
+
+        setFollowingIds(new Set(followingRes.data));
       }
 
-      return updated;
+      const { athletes, coaches, scouts } = dataCache.current;
+
+      let list = [];
+      if (activeType === 'All' || activeType === 'Athletes') list = list.concat(athletes);
+      if (activeType === 'All' || activeType === 'Coaches') list = list.concat(coaches);
+      if (activeType === 'All' || activeType === 'Scouts') list = list.concat(scouts);
+
+      const q = query.toLowerCase();
+
+      const filtered = list
+        .filter((item) => item.userId !== myUserId)
+        .filter((item) => {
+          if (item._type === 'Athlete' && item.sport && selectedSport) {
+            if (item.sport.toLowerCase() !== selectedSport.toLowerCase()) return false;
+          }
+          if (item._type === 'Scout' && item.sportFocus && selectedSport) {
+            if (item.sportFocus.toLowerCase() !== selectedSport.toLowerCase()) return false;
+          }
+          return (item.name || '').toLowerCase().includes(q);
+        });
+
+      setResults(filtered);
+    } catch (err) {
+      console.error('Search error:', err);
+      Alert.alert('Error', 'Could not search right now. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleFollow = async (item) => {
+    if (!item.userId) {
+      Alert.alert('Unavailable', 'This account cannot be followed right now.');
+      return;
+    }
+
+    const isFollowing = followingIds.has(item.userId);
+
+    setFollowingIds((prev) => {
+      const next = new Set(prev);
+      if (isFollowing) next.delete(item.userId);
+      else next.add(item.userId);
+      return next;
+    });
+
+    try {
+      if (isFollowing) {
+        await api.delete(`/api/User/Unfollow/${item.userId}`);
+      } else {
+        await api.post(`/api/User/follow/${item.userId}`);
+      }
+    } catch (err) {
+      setFollowingIds((prev) => {
+        const next = new Set(prev);
+        if (isFollowing) next.add(item.userId);
+        else next.delete(item.userId);
+        return next;
+      });
+      Alert.alert('Error', 'Could not update follow status. Please try again.');
+    }
+  };
+
+  const handleMessage = (item) => {
+    if (!item.userId) {
+      Alert.alert('Unavailable', 'This account cannot be messaged right now.');
+      return;
+    }
+
+    navigation.navigate('Messages', {
+      recipientId: item.userId,
+      recipientName: item.name,
     });
   };
 
-  const filteredAthletes = useMemo(() => {
-    return athletes.filter((a) => {
-      const q = searchQuery.toLowerCase();
+  const handleViewProfile = (item) => {
+    const idByType = {
+      Athlete: item.athleteId,
+      Coach: item.coachId,
+      Scout: item.scoutId,
+    };
 
-      const matchesSearch =
-        a.name.toLowerCase().includes(q) ||
-        a.sport.toLowerCase().includes(q) ||
-        a.position.toLowerCase().includes(q) ||
-        a.location.toLowerCase().includes(q);
-
-      const matchesSport = selectedSport === 'All' || a.sport === selectedSport;
-
-      const matchesPosition =
-        !filters.position ||
-        a.position.toLowerCase().includes(filters.position.toLowerCase());
-
-      const matchesRegion =
-        !filters.region ||
-        a.location.toLowerCase().includes(filters.region.toLowerCase());
-
-      const matchesRating =
-        !filters.ratingMin || a.rating >= parseFloat(filters.ratingMin);
-
-      const matchesAgeMin =
-        !filters.ageMin || a.age >= parseInt(filters.ageMin, 10);
-
-      const matchesAgeMax =
-        !filters.ageMax || a.age <= parseInt(filters.ageMax, 10);
-
-      return (
-        matchesSearch &&
-        matchesSport &&
-        matchesPosition &&
-        matchesRegion &&
-        matchesRating &&
-        matchesAgeMin &&
-        matchesAgeMax
-      );
+    navigation.navigate('PublicProfile', {
+      type: item._type,
+      id: idByType[item._type],
+      isFollowing: item.userId ? followingIds.has(item.userId) : false,
     });
-  }, [searchQuery, selectedSport, filters]);
+  };
 
-  const renderAthlete = useCallback(
-    ({ item }) => {
-      const isSaved = savedAthletes.has(item.id);
+  const subtitleFor = (item) => {
+    if (item._type === 'Athlete') {
+      return `${item.sport ?? '—'}${item.position ? ' • ' + item.position : ''}${item.region ? ' • ' + item.region : ''}`;
+    }
+    if (item._type === 'Coach') {
+      return item.affiliation || 'Coach';
+    }
+    if (item._type === 'Scout') {
+      return `${item.organization ?? 'Scout'}${item.sportFocus ? ' • ' + item.sportFocus : ''}`;
+    }
+    return '';
+  };
 
+  const badgeFor = (item) => {
+    if (item._type === 'Athlete' && item.verified) {
       return (
-        <View style={styles.athleteCard}>
-          <View style={styles.imageSection}>
-            <Image source={{ uri: item.coverImage }} style={styles.coverImage} />
-
-            <LinearGradient
-              colors={['transparent', 'rgba(0,0,0,0.5)']}
-              style={styles.imageGradient}
-            />
-
-            {item.verified && (
-              <View style={styles.verifiedBadge}>
-                <Text style={styles.verifiedText}>VERIFIED</Text>
-              </View>
-            )}
-
-            <View style={styles.ratingBadge}>
-              <MaterialCommunityIcons name="star" size={14} color={COLORS.yellow} />
-              <Text style={styles.ratingText}>{item.rating}</Text>
-            </View>
-          </View>
-
-          <View style={styles.infoSection}>
-            <View style={styles.nameRow}>
-              <Text style={styles.athleteName}>{item.name}</Text>
-
-              {item.verified && (
-                <Feather name="check-circle" size={18} color={COLORS.cyan} />
-              )}
-            </View>
-
-            <Text style={styles.sportText}>{item.sport}</Text>
-            <Text style={styles.positionText}>
-              {item.position} • {item.location}
-            </Text>
-
-            <View style={styles.statsRow}>
-              <StatChip label="Goals" value={item.goals} />
-              <StatChip label="Assists" value={item.assists} />
-              <StatChip label="Matches" value={item.matches} />
-            </View>
-
-            <View style={styles.actionRow}>
-              <TouchableOpacity
-                activeOpacity={0.75}
-                style={styles.viewProfileButton}
-                onPress={() => navigation.navigate('AthleteProfile', { athlete: item })}
-              >
-                <Text style={styles.viewProfileText}>View Profile</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                activeOpacity={0.75}
-                style={styles.circleButton}
-                onPress={() => navigation.navigate('Messages', { athleteName: item.name })}
-              >
-                <Feather name="mail" size={18} color={COLORS.gray600} />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                activeOpacity={0.75}
-                style={styles.circleButton}
-                onPress={() => toggleSave(item.id)}
-              >
-                <MaterialCommunityIcons
-                  name={isSaved ? 'bookmark' : 'bookmark-outline'}
-                  size={22}
-                  color={isSaved ? COLORS.cyan : COLORS.gray600}
-                />
-              </TouchableOpacity>
-            </View>
-          </View>
+        <View style={styles.verifiedBadge}>
+          <Feather name="check" size={11} color={COLORS.white} />
+          <Text style={styles.verifiedBadgeText}>Verified</Text>
         </View>
       );
-    },
-    [savedAthletes, navigation]
-  );
+    }
+    return null;
+  };
+
+  const renderItem = ({ item }) => {
+    const initial = (item.name || '?').charAt(0).toUpperCase();
+    const isFollowing = item.userId ? followingIds.has(item.userId) : false;
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.cardRow}>
+          {item.profilePhoto ? (
+            <Image source={{ uri: item.profilePhoto }} style={styles.avatar} />
+          ) : (
+            <LinearGradient colors={['#06B6D4', '#3B82F6']} style={styles.avatar}>
+              <Text style={styles.avatarText}>{initial}</Text>
+            </LinearGradient>
+          )}
+
+          <View style={styles.cardInfo}>
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+              <View style={styles.typeTag}>
+                <Text style={styles.typeTagText}>{item._type}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.subtitle} numberOfLines={1}>{subtitleFor(item)}</Text>
+
+            {badgeFor(item)}
+          </View>
+        </View>
+
+        <View style={styles.actionRow}>
+          <TouchableOpacity
+            activeOpacity={0.75}
+            style={styles.viewButton}
+            onPress={() => handleViewProfile(item)}
+          >
+            <Text style={styles.viewButtonText}>View Profile</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.75}
+            style={[styles.followButton, isFollowing && styles.followButtonActive]}
+            onPress={() => handleToggleFollow(item)}
+          >
+            <Text style={[styles.followButtonText, isFollowing && styles.followButtonTextActive]}>
+              {isFollowing ? 'Following' : 'Follow'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.75}
+            style={styles.circleButton}
+            onPress={() => handleMessage(item)}
+          >
+            <Feather name="mail" size={18} color={COLORS.gray700} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <View style={styles.header}>
-          <View style={styles.backRow}>
-            <TouchableOpacity
-              activeOpacity={0.75}
-              style={styles.backButton}
-              onPress={() => navigation.goBack()}
-            >
-              <Feather name="chevron-left" size={22} color={COLORS.gray700} />
-            </TouchableOpacity>
-
-            <Text style={styles.headerTitle}>Search Athletes</Text>
-          </View>
-
-          <View style={styles.searchWrapper}>
-            <Feather
-              name="search"
-              size={20}
-              color={COLORS.gray400}
-              style={styles.searchIcon}
-            />
-
-            <TextInput
-              style={[
-                styles.searchInput,
-                focusedField === 'search' && styles.inputFocused,
-              ]}
-              placeholder="Search athletes..."
-              placeholderTextColor={COLORS.gray400}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              onFocus={() => setFocusedField('search')}
-              onBlur={() => setFocusedField('')}
-            />
-
-            <TouchableOpacity
-              activeOpacity={0.75}
-              style={[
-                styles.filterButton,
-                showFilters && { backgroundColor: COLORS.cyanDark },
-              ]}
-              onPress={toggleFilters}
-            >
-              <Feather name="sliders" size={18} color={COLORS.white} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.chipsScroll}
-            contentContainerStyle={styles.chipsContent}
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <View style={styles.header}>
+        <View style={styles.headerTopRow}>
+          <TouchableOpacity
+            activeOpacity={0.75}
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
           >
-            {sports.map((sport) => {
-              const active = sport === selectedSport;
+            <Feather name="chevron-left" size={22} color={COLORS.gray700} />
+          </TouchableOpacity>
 
-              return (
-                <TouchableOpacity
-                  key={sport}
-                  activeOpacity={0.75}
-                  style={[styles.sportChip, active && styles.sportChipActive]}
-                  onPress={() => setSelectedSport(sport)}
-                >
-                  <Text
-                    style={[
-                      styles.sportChipText,
-                      active && styles.sportChipTextActive,
-                    ]}
-                  >
-                    {sport}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+          <Text style={styles.headerTitle}>Search</Text>
+        </View>
 
-          {showFilters && (
-            <View style={styles.filtersPanel}>
-              <View style={styles.filterHeader}>
-                <Text style={styles.filterTitle}>Advanced Filters</Text>
-
-                <TouchableOpacity
-                  activeOpacity={0.75}
-                  style={styles.closeFilterButton}
-                  onPress={toggleFilters}
-                >
-                  <Feather name="x" size={16} color={COLORS.gray600} />
-                </TouchableOpacity>
-              </View>
-
-              <FilterInput
-                label="Position"
-                placeholder="e.g., Point Guard, Striker"
-                value={filters.position}
-                onChangeText={(text) => updateFilter('position', text)}
-                focused={focusedField === 'position'}
-                onFocus={() => setFocusedField('position')}
-                onBlur={() => setFocusedField('')}
-              />
-
-              <Text style={styles.filterLabel}>Age Range</Text>
-
-              <View style={styles.ageRow}>
-                <TextInput
-                  style={[
-                    styles.filterInput,
-                    focusedField === 'ageMin' && styles.filterInputFocused,
-                    styles.ageInput,
-                  ]}
-                  placeholder="Min Age"
-                  placeholderTextColor={COLORS.gray400}
-                  keyboardType="numeric"
-                  value={filters.ageMin}
-                  onChangeText={(text) => updateFilter('ageMin', text)}
-                  onFocus={() => setFocusedField('ageMin')}
-                  onBlur={() => setFocusedField('')}
-                />
-
-                <TextInput
-                  style={[
-                    styles.filterInput,
-                    focusedField === 'ageMax' && styles.filterInputFocused,
-                    styles.ageInput,
-                  ]}
-                  placeholder="Max Age"
-                  placeholderTextColor={COLORS.gray400}
-                  keyboardType="numeric"
-                  value={filters.ageMax}
-                  onChangeText={(text) => updateFilter('ageMax', text)}
-                  onFocus={() => setFocusedField('ageMax')}
-                  onBlur={() => setFocusedField('')}
-                />
-              </View>
-
-              <FilterInput
-                label="Region"
-                placeholder="e.g., Cape Town, Johannesburg"
-                value={filters.region}
-                onChangeText={(text) => updateFilter('region', text)}
-                focused={focusedField === 'region'}
-                onFocus={() => setFocusedField('region')}
-                onBlur={() => setFocusedField('')}
-              />
-
-              <FilterInput
-                label="Minimum Rating"
-                placeholder="8.0"
-                value={filters.ratingMin}
-                onChangeText={(text) => updateFilter('ratingMin', text)}
-                focused={focusedField === 'ratingMin'}
-                onFocus={() => setFocusedField('ratingMin')}
-                onBlur={() => setFocusedField('')}
-                keyboardType="decimal-pad"
-              />
-
-              <TouchableOpacity
-                activeOpacity={0.75}
-                style={styles.clearButton}
-                onPress={clearFilters}
-              >
-                <Text style={styles.clearButtonText}>Clear All Filters</Text>
-              </TouchableOpacity>
-            </View>
+        <View style={styles.searchWrapper}>
+          <Feather name="search" size={18} color={COLORS.gray400} style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search by name..."
+            placeholderTextColor={COLORS.gray400}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoFocus
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
+              <Feather name="x-circle" size={18} color={COLORS.gray400} />
+            </TouchableOpacity>
           )}
         </View>
 
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabsRow}
+        >
+          {TYPE_TABS.map((tab) => {
+            const active = tab === activeType;
+            return (
+              <TouchableOpacity
+                key={tab}
+                activeOpacity={0.75}
+                style={[styles.tabChip, active && styles.tabChipActive]}
+                onPress={() => setActiveType(tab)}
+              >
+                <Text style={[styles.tabChipText, active && styles.tabChipTextActive]}>{tab}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.sportsRow}
+        >
+          {SPORTS.map((sport) => {
+            const active = sport === selectedSport;
+            return (
+              <TouchableOpacity
+                key={sport}
+                activeOpacity={0.75}
+                style={[styles.sportChip, active && styles.sportChipActive]}
+                onPress={() => setSelectedSport(sport)}
+              >
+                <Text style={[styles.sportChipText, active && styles.sportChipTextActive]}>{sport}</Text>
+              </TouchableOpacity>
+            );
+          })}
+          <Text style={styles.moreSportsNote}>More sports coming soon</Text>
+        </ScrollView>
+      </View>
+
+      {!hasSearched ? (
+        <View style={styles.center}>
+          <Feather name="search" size={48} color={COLORS.gray300} />
+          <Text style={styles.promptTitle}>Search for people</Text>
+          <Text style={styles.promptText}>
+            Type a name above to find Athletes, Coaches, or Scouts.
+          </Text>
+        </View>
+      ) : loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={COLORS.cyan} />
+        </View>
+      ) : (
         <FlatList
-          data={filteredAthletes}
-          renderItem={renderAthlete}
-          keyExtractor={(item) => item.id}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={<EmptyState />}
+          data={results}
+          keyExtractor={(item, index) => `${item._type}-${item.athleteId ?? item.coachId ?? item.scoutId ?? index}`}
+          renderItem={renderItem}
+          contentContainerStyle={[styles.listContent, { paddingBottom: 24 + insets.bottom }]}
+          ListEmptyComponent={
+            <View style={styles.center}>
+              <Feather name="frown" size={48} color={COLORS.gray300} />
+              <Text style={styles.emptyText}>No results found</Text>
+            </View>
+          }
         />
-      </KeyboardAvoidingView>
+      )}
     </SafeAreaView>
   );
 }
 
-function FilterInput({
-  label,
-  placeholder,
-  value,
-  onChangeText,
-  focused,
-  onFocus,
-  onBlur,
-  keyboardType = 'default',
-}) {
-  return (
-    <View style={styles.filterField}>
-      <Text style={styles.filterLabel}>{label}</Text>
-
-      <TextInput
-        style={[styles.filterInput, focused && styles.filterInputFocused]}
-        placeholder={placeholder}
-        placeholderTextColor={COLORS.gray400}
-        value={value}
-        onChangeText={onChangeText}
-        onFocus={onFocus}
-        onBlur={onBlur}
-        keyboardType={keyboardType}
-      />
-    </View>
-  );
-}
-
-function StatChip({ label, value }) {
-  return (
-    <View style={styles.statChip}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={styles.statValue}>{value}</Text>
-    </View>
-  );
-}
-
-function EmptyState() {
-  return (
-    <View style={styles.emptyState}>
-      <Feather name="search" size={48} color={COLORS.gray300} />
-      <Text style={styles.emptyTitle}>No athletes found</Text>
-      <Text style={styles.emptyText}>Try adjusting your search or filters</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.gray50,
-  },
-
-  keyboardView: {
-    flex: 1,
-  },
+  safeArea: { flex: 1, backgroundColor: COLORS.gray50 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: responsive(60), paddingHorizontal: responsive(32) },
 
   header: {
     backgroundColor: COLORS.white,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.gray200,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
+    paddingHorizontal: responsive(16),
+    paddingTop: responsive(12),
+    paddingBottom: responsive(8),
   },
 
-  backRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 16,
-  },
-
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
+  headerTopRow: { flexDirection: 'row', alignItems: 'center', gap: responsive(10), marginBottom: responsive(12) },
+  backButton: { width: responsive(36), height: responsive(36), alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: responsive(22), fontWeight: '700', color: COLORS.black },
 
   searchWrapper: {
-    position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
-  },
-
-  searchInput: {
-    flex: 1,
-    height: 48,
-    paddingLeft: 48,
-    paddingRight: 52,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: COLORS.gray300,
-    backgroundColor: COLORS.white,
-    fontSize: 15,
-    color: COLORS.black,
-  },
-
-  inputFocused: {
-    borderColor: COLORS.cyan,
-    shadowColor: COLORS.cyan,
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-
-  searchIcon: {
-    position: 'absolute',
-    left: 14,
-    zIndex: 2,
-  },
-
-  filterButton: {
-    position: 'absolute',
-    right: 4,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: COLORS.cyan,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  chipsScroll: {
-    marginTop: 12,
-  },
-
-  chipsContent: {
-    paddingBottom: 4,
-  },
-
-  sportChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
     backgroundColor: COLORS.gray100,
-    marginRight: 8,
+    borderRadius: responsive(24),
+    paddingHorizontal: responsive(14),
+    height: responsive(44),
+    marginBottom: responsive(10),
+    gap: responsive(8),
   },
+  searchIcon: {},
+  searchInput: { flex: 1, fontSize: responsive(15), color: COLORS.black },
 
-  sportChipActive: {
-    backgroundColor: COLORS.cyan,
-  },
+  tabsRow: { paddingBottom: responsive(8), gap: responsive(8) },
+  tabChip: { paddingHorizontal: responsive(14), paddingVertical: responsive(7), borderRadius: responsive(18), backgroundColor: COLORS.gray100 },
+  tabChipActive: { backgroundColor: COLORS.cyan },
+  tabChipText: { fontSize: responsive(13), fontWeight: '600', color: COLORS.gray700 },
+  tabChipTextActive: { color: COLORS.white },
 
-  sportChipText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: COLORS.gray700,
-  },
+  sportsRow: { alignItems: 'center', gap: responsive(8) },
+  sportChip: { paddingHorizontal: responsive(14), paddingVertical: responsive(6), borderRadius: responsive(16), borderWidth: 1, borderColor: COLORS.cyan },
+  sportChipActive: { backgroundColor: COLORS.cyan },
+  sportChipText: { fontSize: responsive(12), fontWeight: '600', color: COLORS.cyan },
+  sportChipTextActive: { color: COLORS.white },
+  moreSportsNote: { fontSize: responsive(11), color: COLORS.gray400, marginLeft: responsive(6) },
 
-  sportChipTextActive: {
-    color: COLORS.white,
-    fontWeight: '600',
-  },
+  promptTitle: { fontSize: responsive(16), fontWeight: '700', color: COLORS.gray500, marginTop: responsive(14) },
+  promptText: { fontSize: responsive(13), color: COLORS.gray400, marginTop: responsive(4), textAlign: 'center' },
 
-  filtersPanel: {
-    marginTop: 12,
-    backgroundColor: COLORS.gray50,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.gray200,
-    padding: 16,
-  },
+  listContent: { padding: responsive(16), flexGrow: 1 },
 
-  filterHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-
-  filterTitle: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
-
-  closeFilterButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  filterField: {
-    marginBottom: 12,
-  },
-
-  filterLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.gray700,
-    marginBottom: 6,
-  },
-
-  filterInput: {
-    height: 44,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.gray300,
-    paddingHorizontal: 14,
-    fontSize: 14,
+  card: {
     backgroundColor: COLORS.white,
-    color: COLORS.black,
-  },
-
-  filterInputFocused: {
-    borderColor: COLORS.cyan,
-  },
-
-  ageRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-
-  ageInput: {
-    flex: 1,
-  },
-
-  clearButton: {
-    width: '100%',
-    height: 40,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-
-  clearButtonText: {
-    color: COLORS.cyan,
-    fontWeight: '600',
-    fontSize: 14,
-  },
-
-  listContent: {
-    paddingTop: 16,
-    paddingBottom: 32,
-  },
-
-  athleteCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 16,
-    overflow: 'hidden',
-    marginHorizontal: 16,
-    marginBottom: 16,
+    borderRadius: responsive(14),
     borderWidth: 1,
     borderColor: COLORS.gray100,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 3,
+    padding: responsive(14),
+    marginBottom: responsive(12),
   },
 
-  imageSection: {
-    height: 192,
-    position: 'relative',
-  },
+  cardRow: { flexDirection: 'row', alignItems: 'center', gap: responsive(12), marginBottom: responsive(12) },
 
-  coverImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
+  avatar: {
+    width: responsive(52),
+    height: responsive(52),
+    borderRadius: responsive(26),
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  avatarText: { color: COLORS.white, fontWeight: '700', fontSize: responsive(19) },
 
-  imageGradient: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 96,
-  },
+  cardInfo: { flex: 1 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: responsive(8) },
+  name: { flex: 1, fontSize: responsive(15), fontWeight: '700', color: COLORS.black },
+
+  typeTag: { paddingHorizontal: responsive(8), paddingVertical: responsive(2), borderRadius: responsive(10), backgroundColor: COLORS.gray100 },
+  typeTagText: { fontSize: responsive(10), fontWeight: '600', color: COLORS.gray500 },
+
+  subtitle: { fontSize: responsive(13), color: COLORS.gray500, marginTop: responsive(2) },
 
   verifiedBadge: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
     backgroundColor: COLORS.cyan,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
+    alignSelf: 'flex-start',
+    borderRadius: responsive(8),
+    paddingHorizontal: responsive(6),
+    paddingVertical: responsive(2),
+    marginTop: responsive(4),
   },
+  verifiedBadgeText: { color: COLORS.white, fontSize: responsive(10), fontWeight: '700' },
 
-  verifiedText: {
-    color: COLORS.white,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
+  actionRow: { flexDirection: 'row', gap: responsive(8) },
 
-  ratingBadge: {
-    position: 'absolute',
-    bottom: 12,
-    left: 12,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-
-  ratingText: {
-    color: COLORS.white,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  infoSection: {
-    padding: 14,
-  },
-
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
-  },
-
-  athleteName: {
+  viewButton: {
     flex: 1,
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
-
-  sportText: {
-    fontSize: 13,
-    color: COLORS.gray700,
-    marginBottom: 2,
-  },
-
-  positionText: {
-    fontSize: 13,
-    color: COLORS.gray500,
-  },
-
-  statsRow: {
-    marginTop: 10,
-    marginBottom: 10,
-    flexDirection: 'row',
-    gap: 16,
-  },
-
-  statChip: {
-    backgroundColor: COLORS.gray50,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    alignItems: 'center',
-  },
-
-  statLabel: {
-    fontSize: 10,
-    color: COLORS.gray500,
-    fontWeight: '500',
-  },
-
-  statValue: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.black,
-  },
-
-  actionRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-  },
-
-  viewProfileButton: {
-    flex: 1,
-    height: 44,
+    height: responsive(40),
     backgroundColor: COLORS.cyan,
-    borderRadius: 24,
+    borderRadius: responsive(20),
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
   },
+  viewButtonText: { color: COLORS.white, fontSize: responsive(13), fontWeight: '600' },
 
-  viewProfileText: {
-    color: COLORS.white,
-    fontSize: 14,
-    fontWeight: '600',
+  followButton: {
+    paddingHorizontal: responsive(14),
+    height: responsive(40),
+    borderRadius: responsive(20),
+    borderWidth: 1.5,
+    borderColor: COLORS.cyan,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  followButtonActive: { backgroundColor: COLORS.cyan },
+  followButtonText: { fontSize: responsive(13), fontWeight: '600', color: COLORS.cyan },
+  followButtonTextActive: { color: COLORS.white },
 
   circleButton: {
-    width: 44,
-    height: 44,
+    width: responsive(40),
+    height: responsive(40),
+    borderRadius: responsive(20),
     borderWidth: 1,
     borderColor: COLORS.gray300,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 120,
-    paddingHorizontal: 24,
   },
 
-  emptyTitle: {
-    marginTop: 12,
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.gray500,
-  },
-
-  emptyText: {
-    fontSize: 13,
-    color: COLORS.gray400,
-    marginTop: 4,
-  },
+  emptyText: { fontSize: responsive(14), color: COLORS.gray400, marginTop: responsive(12) },
 });
