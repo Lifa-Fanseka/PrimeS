@@ -34,6 +34,21 @@ function getVideoThumbnail(videoUrl) {
   return videoUrl.replace(/\.\w+(\?.*)?$/, '.jpg');
 }
 
+// Three real states now that the backend distinguishes "rejected" from
+// "not yet reviewed" — previously both looked identical (verified: false),
+// so a rejected highlight had no way to show as anything but "Pending".
+function getHighlightStatus(highlight) {
+  if (highlight.rejected) return { label: 'Rejected', color: COLORS_STATUS.red };
+  if (highlight.verified) return { label: 'Approved', color: COLORS_STATUS.green };
+  return { label: 'Pending', color: COLORS_STATUS.pending };
+}
+
+const COLORS_STATUS = {
+  green: '#22C55E',
+  red: '#EF4444',
+  pending: '#F59E0B',
+};
+
 const COLORS = {
   cyan: '#06B6D4',
   cyanDark: '#0891B2',
@@ -505,42 +520,40 @@ export default function ProfileScreen({ navigation }) {
                   </TouchableOpacity>
                 </View>
                 {highlights.length === 0 && <Text style={styles.aboutText}>No highlight videos yet.</Text>}
-                {highlights.map((highlight) => (
-                  <TouchableOpacity
-                    key={highlight.mediaId}
-                    activeOpacity={0.75}
-                    style={styles.highlightCard}
-                    onPress={() => {
-                      setSelectedHighlight(highlight);
-                      setShowVideoModal(true);
-                    }}
-                  >
-                    <View style={styles.highlightThumbnail}>
-                      <Image source={{ uri: getVideoThumbnail(highlight.fileUrl) }} style={styles.highlightImage} />
-                      <View style={styles.highlightOverlay} />
-                      <View style={styles.highlightPlayButton}>
-                        <Feather name="play" size={22} color={COLORS.cyan} />
-                      </View>
-                      {highlight.verified ? (
-                        <View style={styles.highlightVerified}>
-                          <Feather name="check" size={10} color={COLORS.white} />
-                          <Text style={styles.highlightVerifiedText}>Verified</Text>
+                {highlights.map((highlight) => {
+                  const status = getHighlightStatus(highlight);
+                  return (
+                    <TouchableOpacity
+                      key={highlight.mediaId}
+                      activeOpacity={0.75}
+                      style={styles.highlightCard}
+                      onPress={() => {
+                        setSelectedHighlight(highlight);
+                        setShowVideoModal(true);
+                      }}
+                    >
+                      <View style={styles.highlightThumbnail}>
+                        <Image source={{ uri: getVideoThumbnail(highlight.fileUrl) }} style={styles.highlightImage} />
+                        <View style={styles.highlightOverlay} />
+                        <View style={styles.highlightPlayButton}>
+                          <Feather name="play" size={22} color={COLORS.cyan} />
                         </View>
-                      ) : (
-                        <View style={[styles.highlightVerified, { backgroundColor: '#F59E0B' }]}>
-                          <Text style={styles.highlightVerifiedText}>Pending</Text>
+                        <View style={[styles.highlightVerified, { backgroundColor: status.color }]}>
+                          {status.label === 'Approved' && <Feather name="check" size={10} color={COLORS.white} />}
+                          {status.label === 'Rejected' && <Feather name="x" size={10} color={COLORS.white} />}
+                          <Text style={styles.highlightVerifiedText}>{status.label}</Text>
                         </View>
-                      )}
-                    </View>
-                    <View style={styles.highlightInfo}>
-                      <Text style={styles.highlightTitle}>{highlight.caption || 'Untitled highlight'}</Text>
-                      <View style={styles.highlightMetaRow}>
-                        <Text style={styles.highlightDate}>{formatDate(highlight.uploadDate)}</Text>
-                        <Text style={styles.highlightViews}>{highlight.likeCount} likes</Text>
                       </View>
-                    </View>
-                  </TouchableOpacity>
-                ))}
+                      <View style={styles.highlightInfo}>
+                        <Text style={styles.highlightTitle}>{highlight.caption || 'Untitled highlight'}</Text>
+                        <View style={styles.highlightMetaRow}>
+                          <Text style={styles.highlightDate}>{formatDate(highlight.uploadDate)}</Text>
+                          <Text style={styles.highlightViews}>{highlight.likeCount} likes</Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             )}
           </View>
@@ -878,6 +891,7 @@ function AddStatsModal({ visible, onClose, matches, selectedMatchId, setSelected
 }
 function VideoPreviewModal({ visible, highlight, onClose }) {
   if (!highlight) return null;
+  const status = getHighlightStatus(highlight);
   return (
     <Modal visible={visible} animationType="fade">
       <View style={styles.videoModal}>
@@ -890,12 +904,11 @@ function VideoPreviewModal({ visible, highlight, onClose }) {
           </View>
           <Text style={styles.videoTitle}>{highlight.caption || 'Untitled highlight'}</Text>
           <Text style={styles.videoMeta}>{formatDate(highlight.uploadDate)} • {highlight.likeCount} likes</Text>
-          {highlight.verified && (
-            <View style={styles.videoVerifiedBadge}>
-              <Feather name="check" size={12} color={COLORS.white} />
-              <Text style={styles.videoVerifiedText}>Verified</Text>
-            </View>
-          )}
+          <View style={[styles.videoVerifiedBadge, { backgroundColor: status.color }]}>
+            {status.label === 'Approved' && <Feather name="check" size={12} color={COLORS.white} />}
+            {status.label === 'Rejected' && <Feather name="x" size={12} color={COLORS.white} />}
+            <Text style={styles.videoVerifiedText}>{status.label}</Text>
+          </View>
         </View>
       </View>
     </Modal>
@@ -1021,7 +1034,7 @@ const styles = StyleSheet.create({
   highlightImage: { width: '100%', height: '100%' },
   highlightOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.2)' },
   highlightPlayButton: { position: 'absolute', top: '50%', left: '50%', marginLeft: responsive(-16), marginTop: responsive(-16), width: responsive(32), height: responsive(32), borderRadius: responsive(16), backgroundColor: 'rgba(255,255,255,0.9)', alignItems: 'center', justifyContent: 'center' },
-  highlightVerified: { position: 'absolute', top: responsive(6), left: responsive(6), flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: COLORS.green, borderRadius: responsive(8), paddingHorizontal: responsive(6), paddingVertical: responsive(2) },
+  highlightVerified: { position: 'absolute', top: responsive(6), left: responsive(6), flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: responsive(8), paddingHorizontal: responsive(6), paddingVertical: responsive(2) },
   highlightVerifiedText: { fontSize: responsive(9), fontWeight: '700', color: COLORS.white },
   highlightInfo: { flex: 1, justifyContent: 'center' },
   highlightTitle: { fontSize: responsive(14), fontWeight: '700', color: COLORS.black },
@@ -1094,7 +1107,7 @@ const styles = StyleSheet.create({
   videoBigPlay: { position: 'absolute', top: '50%', left: '50%', marginLeft: responsive(-28), marginTop: responsive(-28), width: responsive(56), height: responsive(56), borderRadius: responsive(28), backgroundColor: 'rgba(255,255,255,0.9)', alignItems: 'center', justifyContent: 'center' },
   videoTitle: { color: COLORS.white, fontSize: responsive(16), fontWeight: '700', marginTop: responsive(16) },
   videoMeta: { color: COLORS.gray400, fontSize: responsive(12), marginTop: responsive(4) },
-  videoVerifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.green, borderRadius: responsive(10), paddingHorizontal: responsive(10), paddingVertical: responsive(4), marginTop: responsive(10) },
+  videoVerifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: responsive(10), paddingHorizontal: responsive(10), paddingVertical: responsive(4), marginTop: responsive(10) },
   videoVerifiedText: { color: COLORS.white, fontSize: responsive(11), fontWeight: '700' },
   videoNote: { color: COLORS.gray400, fontSize: responsive(11), marginTop: responsive(16), textAlign: 'center' },
 });

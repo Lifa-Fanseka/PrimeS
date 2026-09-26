@@ -19,8 +19,20 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { Image as ExpoImage } from 'expo-image';
+import VideoPlayer from '../components/VideoPlayer';
+import LoadingScreen from '../components/LoadingScreen';
 import api from '../api/client';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+// Cloudinary generates a real video-frame thumbnail automatically
+// when you request the video's URL with an image extension instead —
+// no separate upload step needed since the video is already stored there.
+function getVideoThumbnail(videoUrl) {
+  if (!videoUrl) return videoUrl;
+  return videoUrl.replace(/\.\w+(\?.*)?$/, '.jpg');
+}
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const scale = SCREEN_WIDTH / 390;
 const responsive = size => Math.round(size * Math.min(scale, 1.18));
@@ -169,6 +181,7 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
   const navHook = useNavigation();
   const navigation = navProp || navHook;
   const [activeTab, setActiveTab] = useState('home');
+  const [videoPlaybackUrl, setVideoPlaybackUrl] = useState(null);
   const [activeModal, setActiveModal] = useState(null);
   const [coachProfile, setCoachProfile] = useState(null);
   const [teamPlayers, setTeamPlayers] = useState([]);
@@ -184,7 +197,8 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
   const [resultNotes, setResultNotes] = useState('');
   const [resultSubmitting, setResultSubmitting] = useState(false);
   const [fixtureOpponent, setFixtureOpponent] = useState('');
-  const [fixtureDate, setFixtureDate] = useState('');
+  const [fixtureDate, setFixtureDate] = useState(null);
+  const [showFixtureDatePicker, setShowFixtureDatePicker] = useState(false);
   const [fixtureType, setFixtureType] = useState('League');
   const [fixtureLocation, setFixtureLocation] = useState('');
   const [fixtureSubmitting, setFixtureSubmitting] = useState(false);
@@ -267,6 +281,15 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
       Alert.alert('Error', 'Could not verify this statistic.');
     }
   };
+  const handleRejectStat = async (stat) => {
+    try {
+      await api.put(`/api/Statistics/VerifyAthleteStats/${stat.statId}`, { verified: false });
+      Alert.alert('Rejected', 'Player statistics have been rejected.');
+      loadAll();
+    } catch (err) {
+      Alert.alert('Error', 'Could not reject this statistic.');
+    }
+  };
   const handleRecommendPlayer = (player) => {
     Alert.alert(
       'Recommend Player',
@@ -339,26 +362,45 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
       setResultSubmitting(false);
     }
   };
+  const formatDateForApi = (date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const formatDateForDisplay = (date) => {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const onFixtureDateChange = (event, selectedDate) => {
+    setShowFixtureDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setFixtureDate(selectedDate);
+    }
+  };
+
   const handleSubmitFixture = async () => {
     if (!fixtureOpponent.trim()) {
       Alert.alert('Error', 'Please enter opponent team name.');
       return;
     }
-    if (!fixtureDate.trim()) {
-      Alert.alert('Error', 'Please enter a match date (YYYY-MM-DD).');
+    if (!fixtureDate) {
+      Alert.alert('Error', 'Please select a match date.');
       return;
     }
     setFixtureSubmitting(true);
     try {
       await api.post('/api/Match/CreateMatche', {
-        matchDate: fixtureDate.trim(),
+        matchDate: formatDateForApi(fixtureDate),
         opponentTeam: fixtureOpponent.trim(),
         matchType: fixtureType,
         matchLocation: fixtureLocation.trim() || null,
       });
       Alert.alert('Success', 'Fixture created successfully!');
       setFixtureOpponent('');
-      setFixtureDate('');
+      setFixtureDate(null);
+      setShowFixtureDatePicker(false);
       setFixtureType('League');
       setFixtureLocation('');
       closeModal();
@@ -523,12 +565,21 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
     Alert.alert('Copied', 'Invite code copied — paste it into a message to share with your players.');
   };
   const playerHasPendingStats = (athleteId) => pendingStats.some((s) => s.athleteId === athleteId);
+
+  // Only for the "Upcoming Fixtures" display — the result-picker below
+  // deliberately keeps using the full, unfiltered `fixtures` list,
+  // since a coach logs a result AFTER a match happens, meaning past
+  // fixtures are exactly the ones that still need to be selectable there.
+  const upcomingFixtures = fixtures.filter((f) => {
+    if (!f.matchDate) return true; // no date set yet — keep it visible rather than hide it silently
+    const [year, month, day] = f.matchDate.split('-').map(Number);
+    const matchDay = new Date(year, month - 1, day);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return matchDay >= today;
+  });
   if (loading) {
-    return (
-      <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
-        <ActivityIndicator size="large" color="#06B6D4" />
-      </SafeAreaView>
-    );
+    return <LoadingScreen />;
   }
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -609,11 +660,11 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
               <Text style={styles.linkText}>Add More</Text>
             </TouchableOpacity>
           </View>
-          {fixtures.length === 0 ? (
+          {upcomingFixtures.length === 0 ? (
             <Text style={styles.emptyModalText}>No fixtures yet.</Text>
           ) : (
             <View style={styles.fixtureList}>
-              {fixtures.map(fixture => (
+              {upcomingFixtures.map(fixture => (
                 <FixtureCard key={fixture.matchId} fixture={fixture} />
               ))}
             </View>
@@ -697,7 +748,31 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
       <ModalShell visible={activeModal === 'uploadFixture'} title="Upload Fixture" onClose={closeModal}>
         <View style={styles.modalBody}>
           <FormField label="Opponent Team" value={fixtureOpponent} onChangeText={setFixtureOpponent} placeholder="Enter opponent name" />
-          <FormField label="Match Date" value={fixtureDate} onChangeText={setFixtureDate} placeholder="YYYY-MM-DD" />
+          <Text style={styles.formLabel}>Match Date</Text>
+          <TouchableOpacity
+            style={styles.dateFieldRow}
+            onPress={() => setShowFixtureDatePicker(true)}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="calendar-outline" size={18} color="#6B7280" style={styles.dateFieldIcon} />
+            <Text style={[styles.dateFieldText, !fixtureDate && styles.dateFieldPlaceholder]}>
+              {fixtureDate ? formatDateForDisplay(fixtureDate) : 'Select match date'}
+            </Text>
+          </TouchableOpacity>
+          {showFixtureDatePicker && (
+            <DateTimePicker
+              value={fixtureDate || new Date()}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'inline' : 'default'}
+              onChange={onFixtureDateChange}
+              minimumDate={new Date()}
+            />
+          )}
+          {Platform.OS === 'ios' && showFixtureDatePicker && (
+            <TouchableOpacity style={styles.dateDoneBtn} onPress={() => setShowFixtureDatePicker(false)}>
+              <Text style={styles.dateDoneBtnText}>Done</Text>
+            </TouchableOpacity>
+          )}
           <Text style={styles.formLabel}>Match Type</Text>
           <View style={styles.venueToggle}>
             {MATCH_TYPES.map(type => (
@@ -743,10 +818,15 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
                       <Text style={styles.boldText}>Rating: </Text>{stat.matchRating ?? '—'}
                     </Text>
                   </View>
-                  <TouchableOpacity style={styles.submitBtn} onPress={() => handleVerifyStat(stat)}>
-                    <Ionicons name="checkmark-circle-outline" size={18} color="#ffffff" />
-                    <Text style={styles.submitBtnText}>{'  '}Verify Statistics</Text>
-                  </TouchableOpacity>
+                  <View style={styles.highlightActions}>
+                    <TouchableOpacity style={styles.approveBtn} onPress={() => handleVerifyStat(stat)}>
+                      <Ionicons name="checkmark-circle-outline" size={16} color="#ffffff" />
+                      <Text style={styles.approveBtnText}>Verify</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.rejectBtn} onPress={() => handleRejectStat(stat)}>
+                      <Text style={styles.rejectBtnText}>Reject</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               );
             })
@@ -769,10 +849,22 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
                     <Text style={styles.playerPosition}>{highlight.uploadDate?.slice(0, 10)}</Text>
                   </View>
                 </View>
-                <View style={styles.videoPlaceholder}>
-                  <Ionicons name="videocam-outline" size={40} color="#9CA3AF" />
-                  <Text style={styles.videoPlaceholderText}>Tap to preview</Text>
-                </View>
+                <TouchableOpacity
+                  style={styles.videoPlaceholder}
+                  activeOpacity={0.85}
+                  onPress={() => setVideoPlaybackUrl(highlight.fileUrl)}
+                >
+                  <ExpoImage
+                    source={{ uri: getVideoThumbnail(highlight.fileUrl) }}
+                    style={StyleSheet.absoluteFillObject}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    transition={200}
+                  />
+                  <View style={styles.videoPlayOverlay}>
+                    <Ionicons name="play-circle" size={44} color="#ffffff" />
+                  </View>
+                </TouchableOpacity>
                 <Text style={styles.highlightDesc}>{highlight.caption || 'No caption'}</Text>
                 <View style={styles.highlightActions}>
                   <TouchableOpacity style={styles.approveBtn} onPress={() => handleApproveHighlight(highlight.mediaId)}>
@@ -1100,6 +1192,17 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
           </TouchableOpacity>
         </View>
       </ModalShell>
+
+      <Modal visible={!!videoPlaybackUrl} animationType="fade" onRequestClose={() => setVideoPlaybackUrl(null)}>
+        <View style={styles.videoPlaybackScreen}>
+          <TouchableOpacity style={styles.videoPlaybackClose} onPress={() => setVideoPlaybackUrl(null)}>
+            <Ionicons name="close" size={24} color="#ffffff" />
+          </TouchableOpacity>
+          {videoPlaybackUrl && (
+            <VideoPlayer uri={videoPlaybackUrl} style={styles.videoPlaybackPlayer} />
+          )}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1588,6 +1691,26 @@ const styles = StyleSheet.create({
     fontSize: responsive(14),
     color: '#000000',
   },
+  dateFieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: responsive(10),
+    paddingHorizontal: responsive(14),
+    marginBottom: responsive(14),
+  },
+  dateFieldIcon: { marginRight: responsive(8) },
+  dateFieldText: { flex: 1, fontSize: responsive(14), color: '#000000', paddingVertical: responsive(14) },
+  dateFieldPlaceholder: { color: '#9CA3AF' },
+  dateDoneBtn: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: responsive(16),
+    paddingVertical: responsive(8),
+    marginBottom: responsive(14),
+  },
+  dateDoneBtnText: { fontSize: responsive(14), fontWeight: '700', color: '#06B6D4' },
   formInputError: {
     borderColor: '#EF4444',
   },
@@ -1753,13 +1876,18 @@ const styles = StyleSheet.create({
     color: '#2563EB',
   },
   videoPlaceholder: {
-    height: responsive(120),
+    height: responsive(160),
     borderRadius: responsive(10),
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#000000',
+    overflow: 'hidden',
+    position: 'relative',
+    marginBottom: responsive(10),
+  },
+  videoPlayOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.25)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: responsive(10),
-    gap: responsive(6),
   },
   videoPlaceholderText: {
     fontSize: responsive(13),
@@ -1791,7 +1919,7 @@ const styles = StyleSheet.create({
   },
   rejectBtn: {
     flex: 1,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#FEE2E2',
     borderRadius: responsive(20),
     paddingVertical: responsive(11),
     alignItems: 'center',
@@ -1800,7 +1928,7 @@ const styles = StyleSheet.create({
   rejectBtnText: {
     fontSize: responsive(14),
     fontWeight: '600',
-    color: '#374151',
+    color: '#DC2626',
   },
   managePlayerList: {
     gap: responsive(10),
@@ -2055,4 +2183,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   standingsCell: { flex: 1, fontSize: responsive(12), color: '#374151', textAlign: 'center' },
+  videoPlaybackScreen: {
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+  },
+  videoPlaybackClose: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoPlaybackPlayer: {
+    width: '100%',
+    height: '60%',
+  },
 });

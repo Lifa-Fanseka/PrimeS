@@ -11,11 +11,15 @@ import {
   Dimensions,
   Platform,
   Alert,
+  Modal,
+  KeyboardAvoidingView,
   ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import api from '../api/client';
+import { pickAndUploadDocument } from '../MediaService/Upload';
 import { SafeAreaView } from 'react-native-safe-area-context';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const scale = SCREEN_WIDTH / 390;
@@ -180,6 +184,7 @@ export default function ScoutDashboardScreen({ navigation }) {
   const handleTabPress = (tab) => {
     setActiveTab(tab);
     if (tab === 'discover') navigation.navigate('Search');
+    if (tab === 'scoutFeed') navigation.navigate('ScoutFeed');
     if (tab === 'messages') navigation.navigate('Messages');
     if (tab === 'profile') navigation.navigate('Profile');
   };
@@ -192,28 +197,87 @@ export default function ScoutDashboardScreen({ navigation }) {
     }
     navigation.navigate('PublicProfile', { type: 'Athlete', id: athlete.athleteId });
   };
-  const handleSendOffer = (athlete) => {
-    Alert.alert(
-      'Send Recruitment Offer',
-      `Send a recruitment offer to ${athlete.name}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Send Offer',
-          onPress: async () => {
-            try {
-              await api.post(`/api/Scout/offers/${athlete.athleteId}`, {
-                offerMessage: `Interested in recruiting ${athlete.name}.`,
-              });
-              Alert.alert('Offer Sent', `Recruitment offer sent to ${athlete.name}!`);
-              loadDashboard(); // refresh the "Recruited" count context
-            } catch (err) {
-              Alert.alert('Error', err?.response?.data ?? 'Could not send the offer.');
-            }
-          },
-        },
-      ]
-    );
+  // ---- Send Offer form ----
+  const [sendOfferModal, setSendOfferModal] = useState(false);
+  const [offerTargetAthlete, setOfferTargetAthlete] = useState(null);
+  const [offerTitle, setOfferTitle] = useState('');
+  const [offerEventDate, setOfferEventDate] = useState(null); // null until the scout actually picks one
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [offerLocation, setOfferLocation] = useState('');
+  const [offerAttachmentUrl, setOfferAttachmentUrl] = useState('');
+  const [offerAttachmentName, setOfferAttachmentName] = useState('');
+  const [pickingDocument, setPickingDocument] = useState(false);
+  const [documentProgress, setDocumentProgress] = useState(0);
+  const [offerSubmitting, setOfferSubmitting] = useState(false);
+
+  const openSendOfferModal = (athlete) => {
+    setOfferTargetAthlete(athlete);
+    setOfferTitle('');
+    setOfferEventDate(null);
+    setShowDatePicker(false);
+    setOfferLocation('');
+    setOfferAttachmentUrl('');
+    setOfferAttachmentName('');
+    setSendOfferModal(true);
+  };
+
+  const formatDateForApi = (date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const formatDateForDisplay = (date) => {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const onDateChange = (event, selectedDate) => {
+    // Android shows its own native dialog and closes automatically;
+    // iOS renders inline, so it stays open until the scout dismisses it.
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setOfferEventDate(selectedDate);
+    }
+  };
+
+  const handlePickDocument = async () => {
+    try {
+      setPickingDocument(true);
+      setDocumentProgress(0);
+      const result = await pickAndUploadDocument(setDocumentProgress);
+      if (result) {
+        setOfferAttachmentUrl(result.url);
+        setOfferAttachmentName(result.name);
+      }
+    } catch (err) {
+      Alert.alert('Upload Failed', err?.message || 'Could not upload the document.');
+    } finally {
+      setPickingDocument(false);
+    }
+  };
+
+  const submitOffer = async () => {
+    if (!offerTitle.trim()) {
+      Alert.alert('Missing Title', 'Please enter a title for this offer.');
+      return;
+    }
+    setOfferSubmitting(true);
+    try {
+      await api.post(`/api/Scout/offers/${offerTargetAthlete.athleteId}`, {
+        title: offerTitle.trim(),
+        eventDate: offerEventDate ? formatDateForApi(offerEventDate) : null,
+        location: offerLocation.trim() || null,
+        attachmentUrl: offerAttachmentUrl || null,
+      });
+      Alert.alert('Offer Sent', `Recruitment offer sent to ${offerTargetAthlete.name}!`);
+      setSendOfferModal(false);
+      loadDashboard(); // refresh the "Recruited" count context
+    } catch (err) {
+      Alert.alert('Error', err?.response?.data ?? 'Could not send the offer.');
+    } finally {
+      setOfferSubmitting(false);
+    }
   };
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -351,38 +415,197 @@ export default function ScoutDashboardScreen({ navigation }) {
                 athlete={athlete}
                 onFavorite={() => handleFavorite(athlete)}
                 onViewProfile={() => handleViewProfile(athlete)}
-                onSendOffer={() => handleSendOffer(athlete)}
+                onSendOffer={() => openSendOfferModal(athlete)}
               />
             ))
           )}
         </View>
       </ScrollView>
       <View style={styles.bottomNav}>
-        {[
-          { tab: 'home', icon: 'home-outline', activeIcon: 'home', label: 'Home' },
-          { tab: 'discover', icon: 'search-outline', activeIcon: 'search', label: 'Discover' },
-          { tab: 'messages', icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses', label: 'Messages' },
-          { tab: 'profile', icon: 'person-outline', activeIcon: 'person', label: 'Me' },
-        ].map((item) => (
+        <TouchableOpacity
+          style={styles.navTab}
+          onPress={() => handleTabPress('home')}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={activeTab === 'home' ? 'home' : 'home-outline'}
+            size={24}
+            color={activeTab === 'home' ? '#06B6D4' : '#6B7280'}
+          />
+          <Text style={[styles.navLabel, activeTab === 'home' && styles.navLabelActive]}>Home</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.navTab}
+          onPress={() => handleTabPress('discover')}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={activeTab === 'discover' ? 'search' : 'search-outline'}
+            size={24}
+            color={activeTab === 'discover' ? '#06B6D4' : '#6B7280'}
+          />
+          <Text style={[styles.navLabel, activeTab === 'discover' && styles.navLabelActive]}>Discover</Text>
+        </TouchableOpacity>
+
+        {/* Centerpiece tab — the scout's swipeable video feed. Raised
+            above the bar and using the same cyan-to-blue gradient as
+            every primary button/avatar elsewhere in the app, so it
+            reads as "the important one" without introducing a new,
+            clashing color into the app's palette. */}
+        <View style={styles.centerTabWrapper}>
           <TouchableOpacity
-            key={item.tab}
-            style={styles.navTab}
-            onPress={() => handleTabPress(item.tab)}
-            activeOpacity={0.7}
+            style={styles.centerTabButton}
+            onPress={() => handleTabPress('scoutFeed')}
+            activeOpacity={0.85}
           >
-            <View>
-              <Ionicons
-                name={activeTab === item.tab ? item.activeIcon : item.icon}
-                size={24}
-                color={activeTab === item.tab ? '#06B6D4' : '#6B7280'}
-              />
-            </View>
-            <Text style={[styles.navLabel, activeTab === item.tab && styles.navLabelActive]}>
-              {item.label}
-            </Text>
+            <LinearGradient
+              colors={['#06B6D4', '#3B82F6']}
+              style={styles.centerTabGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <Ionicons name="play" size={26} color="#ffffff" />
+            </LinearGradient>
           </TouchableOpacity>
-        ))}
+          <Text style={styles.centerTabLabel}>Scout Feed</Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.navTab}
+          onPress={() => handleTabPress('messages')}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={activeTab === 'messages' ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
+            size={24}
+            color={activeTab === 'messages' ? '#06B6D4' : '#6B7280'}
+          />
+          <Text style={[styles.navLabel, activeTab === 'messages' && styles.navLabelActive]}>Messages</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.navTab}
+          onPress={() => handleTabPress('profile')}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={activeTab === 'profile' ? 'person' : 'person-outline'}
+            size={24}
+            color={activeTab === 'profile' ? '#06B6D4' : '#6B7280'}
+          />
+          <Text style={[styles.navLabel, activeTab === 'profile' && styles.navLabelActive]}>Me</Text>
+        </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={sendOfferModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSendOfferModal(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.offerModalBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={styles.offerSheet}>
+            <View style={styles.offerSheetHandle} />
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={styles.offerSheetTitle}>Send Recruitment Offer</Text>
+              {offerTargetAthlete && (
+                <Text style={styles.offerSheetSubtitle}>To {offerTargetAthlete.name}</Text>
+              )}
+
+              <Text style={styles.offerFieldLabel}>Title</Text>
+              <View style={styles.offerFieldRow}>
+                <Ionicons name="document-text-outline" size={18} color="#6B7280" style={styles.offerFieldIcon} />
+                <TextInput
+                  style={styles.offerFieldInput}
+                  placeholder="e.g. Official U-19 Summer Trial Invite"
+                  placeholderTextColor="#9CA3AF"
+                  value={offerTitle}
+                  onChangeText={setOfferTitle}
+                />
+              </View>
+
+              <Text style={styles.offerFieldLabel}>Event Date</Text>
+              <TouchableOpacity
+                style={styles.offerFieldRow}
+                onPress={() => setShowDatePicker(true)}
+                activeOpacity={0.75}
+              >
+                <Ionicons name="calendar-outline" size={18} color="#6B7280" style={styles.offerFieldIcon} />
+                <Text style={[styles.offerFieldDateText, !offerEventDate && styles.offerFieldPlaceholder]}>
+                  {offerEventDate ? formatDateForDisplay(offerEventDate) : 'Select event date'}
+                </Text>
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  value={offerEventDate || new Date()}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                  onChange={onDateChange}
+                  minimumDate={new Date()}
+                />
+              )}
+              {Platform.OS === 'ios' && showDatePicker && (
+                <TouchableOpacity
+                  style={styles.dateDoneBtn}
+                  onPress={() => setShowDatePicker(false)}
+                >
+                  <Text style={styles.dateDoneBtnText}>Done</Text>
+                </TouchableOpacity>
+              )}
+
+              <Text style={styles.offerFieldLabel}>Location</Text>
+              <View style={styles.offerFieldRow}>
+                <Ionicons name="location-outline" size={18} color="#6B7280" style={styles.offerFieldIcon} />
+                <TextInput
+                  style={styles.offerFieldInput}
+                  placeholder="e.g. City Football Academy, Manchester"
+                  placeholderTextColor="#9CA3AF"
+                  value={offerLocation}
+                  onChangeText={setOfferLocation}
+                />
+              </View>
+
+              <Text style={styles.offerFieldLabel}>Offer Document (optional)</Text>
+              <TouchableOpacity
+                style={styles.attachButton}
+                onPress={handlePickDocument}
+                disabled={pickingDocument}
+                activeOpacity={0.75}
+              >
+                <Ionicons name="attach-outline" size={18} color="#06B6D4" />
+                {pickingDocument ? (
+                  <Text style={styles.attachButtonText}>Uploading... {documentProgress}%</Text>
+                ) : offerAttachmentName ? (
+                  <Text style={styles.attachButtonText} numberOfLines={1}>{offerAttachmentName}</Text>
+                ) : (
+                  <Text style={styles.attachButtonText}>Attach Offer Document (PDF)</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.submitOfferBtn, offerSubmitting && { opacity: 0.7 }]}
+                onPress={submitOffer}
+                disabled={offerSubmitting}
+                activeOpacity={0.85}
+              >
+                {offerSubmitting ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.submitOfferBtnText}>Send Offer</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={() => setSendOfferModal(false)} style={styles.cancelOfferBtn}>
+                <Text style={styles.cancelOfferBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -567,4 +790,94 @@ const styles = StyleSheet.create({
   navTab: { flex: 1, alignItems: 'center', gap: responsive(4), paddingVertical: responsive(4), position: 'relative' },
   navLabel: { fontSize: responsive(11), fontWeight: '500', color: '#6B7280' },
   navLabelActive: { color: '#06B6D4' },
+  centerTabWrapper: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  centerTabButton: {
+    marginTop: responsive(-26),
+    ...Platform.select({
+      ios: { shadowColor: '#06B6D4', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 8 },
+      android: { elevation: 6 },
+    }),
+  },
+  centerTabGradient: {
+    width: responsive(56),
+    height: responsive(56),
+    borderRadius: responsive(28),
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: '#ffffff',
+  },
+  centerTabLabel: {
+    fontSize: responsive(11),
+    fontWeight: '600',
+    color: '#06B6D4',
+    marginTop: responsive(4),
+  },
+  offerModalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  offerSheet: {
+    maxHeight: '88%',
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: responsive(20),
+    borderTopRightRadius: responsive(20),
+    paddingHorizontal: responsive(20),
+    paddingTop: responsive(10),
+    paddingBottom: Platform.OS === 'ios' ? responsive(30) : responsive(20),
+  },
+  offerSheetHandle: {
+    width: responsive(40),
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#D1D5DB',
+    alignSelf: 'center',
+    marginBottom: responsive(14),
+  },
+  offerSheetTitle: { fontSize: responsive(18), fontWeight: '800', color: '#111827' },
+  offerSheetSubtitle: { fontSize: responsive(13), color: '#6B7280', marginTop: responsive(2), marginBottom: responsive(16) },
+  offerFieldLabel: { fontSize: responsive(13), fontWeight: '700', color: '#374151', marginBottom: responsive(6) },
+  offerFieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: responsive(10),
+    paddingHorizontal: responsive(12),
+    marginBottom: responsive(14),
+  },
+  offerFieldIcon: { marginRight: responsive(8) },
+  offerFieldInput: { flex: 1, height: responsive(46), fontSize: responsive(14), color: '#000000' },
+  offerFieldDateText: { flex: 1, fontSize: responsive(14), color: '#000000', paddingVertical: responsive(14) },
+  offerFieldPlaceholder: { color: '#9CA3AF' },
+  dateDoneBtn: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: responsive(16),
+    paddingVertical: responsive(8),
+    marginBottom: responsive(14),
+  },
+  dateDoneBtnText: { fontSize: responsive(14), fontWeight: '700', color: '#06B6D4' },
+  attachButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: responsive(8),
+    borderWidth: 1.5,
+    borderColor: '#06B6D4',
+    borderStyle: 'dashed',
+    borderRadius: responsive(10),
+    paddingVertical: responsive(12),
+    paddingHorizontal: responsive(14),
+    marginBottom: responsive(20),
+  },
+  attachButtonText: { flex: 1, fontSize: responsive(13), fontWeight: '600', color: '#06B6D4' },
+  submitOfferBtn: {
+    height: responsive(50),
+    backgroundColor: '#06B6D4',
+    borderRadius: responsive(25),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitOfferBtnText: { fontSize: responsive(15), fontWeight: '700', color: '#ffffff' },
+  cancelOfferBtn: { alignItems: 'center', paddingVertical: responsive(14) },
+  cancelOfferBtnText: { fontSize: responsive(14), fontWeight: '600', color: '#6B7280' },
 });

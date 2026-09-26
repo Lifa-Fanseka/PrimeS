@@ -11,6 +11,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../api/client';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -48,7 +49,8 @@ const COLORS = {
 
 // Maps directly to the "Type" strings the backend actually creates
 // (see NotificationService.CreateAsync calls across MediaController,
-// StatisticsController, MatchController, ChatHub, ParentController).
+// StatisticsController, MatchController, ChatHub, ParentController,
+// ScoutController).
 const TYPE_CONFIG = {
   Like: { iconName: 'heart', bg: COLORS.pinkBg, color: COLORS.pinkIcon, label: 'Likes' },
   Comment: { iconName: 'message-square', bg: COLORS.blueBg, color: COLORS.blueIcon, label: 'Comments' },
@@ -57,6 +59,8 @@ const TYPE_CONFIG = {
   MatchResult: { iconName: 'calendar', bg: COLORS.orangeBg, color: COLORS.orangeIcon, label: 'Matches' },
   Message: { iconName: 'message-circle', bg: COLORS.blueBg, color: COLORS.blueIcon, label: 'Messages' },
   ConsentResponse: { iconName: 'shield', bg: COLORS.cyanBg, color: COLORS.cyanIcon, label: 'Consent' },
+  RecruitmentOffer: { iconName: 'award', bg: COLORS.orangeBg, color: COLORS.orangeIcon, label: 'Offers' },
+  RecruitmentOfferResponse: { iconName: 'award', bg: COLORS.orangeBg, color: COLORS.orangeIcon, label: 'Offers' },
 };
 
 const DEFAULT_TYPE_CONFIG = {
@@ -66,7 +70,7 @@ const DEFAULT_TYPE_CONFIG = {
   label: 'Other',
 };
 
-const FILTER_TABS = ['All', 'Unread', 'Likes', 'Comments', 'Stats', 'Matches', 'Messages', 'Consent'];
+const FILTER_TABS = ['All', 'Unread', 'Likes', 'Comments', 'Stats', 'Matches', 'Messages', 'Consent', 'Offers'];
 
 function formatTimeAgo(dateString) {
   if (!dateString) return '';
@@ -84,6 +88,7 @@ export default function NotificationsScreen({ navigation }) {
   const [activeFilter, setActiveFilter] = useState('All');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [myRole, setMyRole] = useState(null);
 
   const animatedValues = useRef({});
 
@@ -100,6 +105,7 @@ export default function NotificationsScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
+    AsyncStorage.getItem('role').then(setMyRole);
     loadNotifications();
   }, [loadNotifications]);
 
@@ -140,10 +146,27 @@ export default function NotificationsScreen({ navigation }) {
       console.error('Failed to mark as read:', err);
     }
 
-    // Only "Message" notifications have a real screen to deep-link into right now.
     // RelatedId on a Message notification is the sender's UserId (see ChatHub.SendMessage).
     if (notif.type === 'Message' && notif.relatedId) {
       navigation.navigate('Messages', { recipientId: notif.relatedId });
+      return;
+    }
+
+    // RelatedId on a RecruitmentOffer / RecruitmentOfferResponse
+    // notification is the OfferId (see ScoutController.SendOffer and
+    // ParentController.RespondToConsentRequest). The SAME "RecruitmentOffer"
+    // type is sent to both the athlete and — for a minor — their parent,
+    // so where this actually navigates depends on who's tapping it:
+    // the athlete has their own offer-detail screen, but the parent's
+    // equivalent screen isn't built yet, so they land on their dashboard
+    // for now rather than nowhere at all.
+    if ((notif.type === 'RecruitmentOffer' || notif.type === 'RecruitmentOfferResponse') && notif.relatedId) {
+      if (myRole === 'Athlete') {
+        navigation.navigate('OfferDetail', { offerId: notif.relatedId });
+      } else if (myRole === 'Parent') {
+        navigation.navigate('ParentDashboard');
+      }
+      return;
     }
   };
 
@@ -206,7 +229,7 @@ export default function NotificationsScreen({ navigation }) {
         </Animated.View>
       );
     },
-    [notifications]
+    [notifications, myRole]
   );
 
   if (loading) {
@@ -329,8 +352,8 @@ function NotificationCard({ notification, onView, onDismiss }) {
         </View>
 
         <View style={styles.actionRow}>
-          <TouchableOpacity activeOpacity={0.75} style={styles.viewButton} onPress={onView}>
-            <Text style={styles.viewButtonText}>View</Text>
+          <TouchableOpacity activeOpacity={0.75} style={[styles.viewButton, !unread && styles.viewButtonRead]} onPress={onView}>
+            <Text style={[styles.viewButtonText, !unread && styles.viewButtonTextRead]}>{unread ? 'Mark as Read' : 'Read'}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity activeOpacity={0.75} style={styles.dismissButton} onPress={onDismiss}>
@@ -490,7 +513,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
+  viewButtonRead: {
+    backgroundColor: COLORS.gray200,
+  },
+
   viewButtonText: { color: COLORS.white, fontSize: 13, fontWeight: '600' },
+  viewButtonTextRead: { color: COLORS.gray600 },
 
   dismissButton: {
     flexDirection: 'row',

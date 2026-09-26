@@ -40,4 +40,6 @@ export async function register(payload) {
 export async function logout() {
   disconnectChatSession();
   await AsyncStorage.multiRemove(['token', 'userId', 'role']);
+
+  
 }

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Switch,
   StyleSheet,
+  SafeAreaView,
   Modal,
   Alert,
   Animated,
@@ -15,9 +16,32 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import api from '../api/client';
 import { logout } from '../api/auth';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { generateScoutReport, generateCoachReport, generateLeagueReport } from '../api/Reports';
+
+const REPORT_SCOPES = [
+  { id: 'Watchlist', label: 'Shortlisted (Watchlist)' },
+  { id: 'Favorites', label: 'Favorites' },
+  { id: 'Scouted', label: 'All Scouted Athletes' },
+];
+
+const MATCH_TYPES = [
+  { id: '', label: 'All Types' },
+  { id: 'League', label: 'League' },
+  { id: 'Cup', label: 'Cup' },
+  { id: 'Friendly', label: 'Friendly' },
+  { id: 'Tournament', label: 'Tournament' },
+];
+
+const MATCH_RESULTS = [
+  { id: '', label: 'All Results' },
+  { id: 'Win', label: 'Win' },
+  { id: 'Draw', label: 'Draw' },
+  { id: 'Loss', label: 'Loss' },
+];
 
 const COLORS = {
   cyan: '#06B6D4',
@@ -51,10 +75,39 @@ const APP_VERSION = '1.0.0';
 const APP_BUILD = '2026.07';
 
 export default function SettingsScreen({ navigation }) {
+  const [role, setRole] = useState(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [darkModeEnabled, setDarkModeEnabled] = useState(false);
   const [profileVisibility, setProfileVisibility] = useState(true);
   const [scoutMessaging, setScoutMessaging] = useState(true);
+
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportGenerating, setReportGenerating] = useState(false);
+  const [reportFilters, setReportFilters] = useState({
+    // Scout fields
+    scope: 'Watchlist',
+    tag: '',
+    region: '',
+    sport: '',
+    position: '',
+    minimumRating: '',
+    // Coach fields
+    matchType: '',
+    result: '',
+    // League Admin fields
+    competitionId: '',
+    // Shared
+    dateFrom: null,
+    dateTo: null,
+    format: 'pdf',
+  });
+
+  useEffect(() => {
+    (async () => {
+      const storedRole = await AsyncStorage.getItem('role');
+      setRole(storedRole);
+    })();
+  }, []);
 
   const [showPrivacyExpanded, setShowPrivacyExpanded] = useState(false);
   const [showSecurityExpanded, setShowSecurityExpanded] = useState(false);
@@ -150,6 +203,73 @@ export default function SettingsScreen({ navigation }) {
       index: 0,
       routes: [{ name: 'Welcome' }],
     });
+  };
+
+  const updateReportFilter = (field, value) => {
+    setReportFilters((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const toDateOnlyString = (date) => {
+    if (!date) return null;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const handleGenerateReport = async () => {
+    setReportGenerating(true);
+    try {
+      let fileName;
+      if (role === 'Coach') {
+        ({ fileName } = await generateCoachReport({
+          dateFrom: toDateOnlyString(reportFilters.dateFrom),
+          dateTo: toDateOnlyString(reportFilters.dateTo),
+          matchType: reportFilters.matchType,
+          result: reportFilters.result,
+          format: reportFilters.format,
+        }));
+      } else if (role === 'LeagueAdmin') {
+        ({ fileName } = await generateLeagueReport({
+          competitionId: reportFilters.competitionId,
+          dateFrom: toDateOnlyString(reportFilters.dateFrom),
+          dateTo: toDateOnlyString(reportFilters.dateTo),
+          format: reportFilters.format,
+        }));
+      } else {
+        ({ fileName } = await generateScoutReport({
+          scope: reportFilters.scope,
+          tag: reportFilters.tag,
+          dateFrom: toDateOnlyString(reportFilters.dateFrom),
+          dateTo: toDateOnlyString(reportFilters.dateTo),
+          region: reportFilters.region,
+          sport: reportFilters.sport,
+          position: reportFilters.position,
+          minimumRating: reportFilters.minimumRating,
+          format: reportFilters.format,
+        }));
+      }
+
+      setShowReportModal(false);
+      Alert.alert('Report Ready', `${fileName} was generated. Use the share sheet to save or send it.`);
+    } catch (err) {
+      const status = err?.response?.status;
+      const serverMessage = typeof err?.response?.data === 'string' ? err.response.data : null;
+
+      console.log('[report] generation failed', { status, serverMessage, message: err?.message });
+
+      if (status === 404) {
+        Alert.alert('No Results', serverMessage || 'No athletes match the filters you selected. Try widening your date range or removing a filter.');
+      } else if (status === 401) {
+        Alert.alert('Session Expired', 'Please log out and log back in, then try generating the report again.');
+      } else if (status) {
+        Alert.alert('Report Failed', serverMessage || `The server returned an error (${status}). Check the backend console for details.`);
+      } else {
+        Alert.alert('Report Failed', `Could not reach the server: ${err?.message || 'unknown error'}. Check that the API is running and reachable.`);
+      }
+    } finally {
+      setReportGenerating(false);
+    }
   };
 
   return (
@@ -372,6 +492,34 @@ export default function SettingsScreen({ navigation }) {
           )}
         </View>
 
+        {/* Reports — Scout, Coach, and League Admin are all built. */}
+        {(role === 'Scout' || role === 'Coach' || role === 'LeagueAdmin') && (
+          <View style={styles.card}>
+            <TouchableOpacity
+              activeOpacity={0.75}
+              style={[styles.settingsRow]}
+              onPress={() => setShowReportModal(true)}
+            >
+              <View style={styles.iconCircle}>
+                <Feather name="file-text" size={22} color={COLORS.cyanDark} />
+              </View>
+
+              <View style={styles.rowTextColumn}>
+                <Text style={styles.rowTitle}>Generate Report</Text>
+                <Text style={styles.rowSubtitle}>
+                  {role === 'Coach'
+                    ? 'Export team matches and player performance'
+                    : role === 'LeagueAdmin'
+                    ? 'Export standings, top scorers, and fixtures'
+                    : 'Export your scouting data to PDF or Excel'}
+                </Text>
+              </View>
+
+              <Feather name="chevron-right" size={18} color={COLORS.gray400} />
+            </TouchableOpacity>
+          </View>
+        )}
+
         <TouchableOpacity
           activeOpacity={0.75}
           style={styles.logoutCard}
@@ -397,6 +545,16 @@ export default function SettingsScreen({ navigation }) {
         setPasswordForm={setPasswordForm}
         onSave={handlePasswordUpdate}
         submitting={passwordSubmitting}
+      />
+
+      <ReportModal
+        visible={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        role={role}
+        filters={reportFilters}
+        updateFilter={updateReportFilter}
+        onGenerate={handleGenerateReport}
+        generating={reportGenerating}
       />
     </SafeAreaView>
   );
@@ -578,6 +736,336 @@ function ChangePasswordModal({ visible, onClose, passwordForm, setPasswordForm, 
               <ActivityIndicator color={COLORS.white} />
             ) : (
               <Text style={styles.updatePasswordText}>Update Password</Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity activeOpacity={0.75} style={styles.cancelPasswordButton} onPress={onClose}>
+            <Text style={styles.cancelPasswordText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function ReportModal({ visible, onClose, role, filters, updateFilter, onGenerate, generating }) {
+  const [showDateFromPicker, setShowDateFromPicker] = useState(false);
+  const [showDateToPicker, setShowDateToPicker] = useState(false);
+  const [competitions, setCompetitions] = useState([]);
+  const [loadingCompetitions, setLoadingCompetitions] = useState(false);
+  const [competitionsError, setCompetitionsError] = useState(null);
+  const isCoach = role === 'Coach';
+  const isLeagueAdmin = role === 'LeagueAdmin';
+  const isScout = role === 'Scout';
+
+  useEffect(() => {
+    if (!visible || !isLeagueAdmin) return;
+
+    let cancelled = false;
+    setLoadingCompetitions(true);
+    setCompetitionsError(null);
+
+    api
+      .get('/api/LeagueAdmin/GetMyCompetitions')
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res.data) ? res.data : [];
+        setCompetitions(list);
+        // Auto-select when the admin only runs one competition, so they
+        // aren't forced to tap a single chip before generating.
+        if (list.length === 1 && !filters.competitionId) {
+          updateFilter('competitionId', String(list[0].competitionId));
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.log('[reports] failed to load competitions:', err?.response?.status, err?.message);
+        setCompetitionsError('Could not load your competitions.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingCompetitions(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, isLeagueAdmin]);
+
+  const formatDate = (date) => {
+    if (!date) return 'Any';
+    return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent>
+      <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <View style={[styles.modalSheet, styles.reportModalSheet]}>
+          <View style={styles.modalHandle} />
+
+          <TouchableOpacity activeOpacity={0.75} style={styles.modalCloseButton} onPress={onClose}>
+            <Feather name="x" size={20} color={COLORS.gray600} />
+          </TouchableOpacity>
+
+          <Text style={styles.passwordModalTitle}>Generate Report</Text>
+          <Text style={styles.passwordModalSubtitle}>
+            {isCoach
+              ? 'Choose which matches and players to include — the report is built from exactly what you select below.'
+              : isLeagueAdmin
+              ? 'Choose which competition and date range to include — the report is built from exactly what you select below.'
+              : 'Choose which athletes and stats to include — the report is built from exactly what you select below.'}
+          </Text>
+
+          <ScrollView style={styles.reportScroll} showsVerticalScrollIndicator={false}>
+            {isLeagueAdmin && (
+              <>
+                <Text style={styles.reportSectionLabel}>Competition</Text>
+
+                {loadingCompetitions && (
+                  <View style={{ paddingVertical: 8 }}>
+                    <ActivityIndicator color={COLORS.cyanDark} />
+                  </View>
+                )}
+
+                {!loadingCompetitions && competitionsError && (
+                  <Text style={{ color: COLORS.red, marginBottom: 8 }}>{competitionsError}</Text>
+                )}
+
+                {!loadingCompetitions && !competitionsError && competitions.length === 0 && (
+                  <Text style={{ color: COLORS.gray500, marginBottom: 8 }}>
+                    You haven't created any competitions yet.
+                  </Text>
+                )}
+
+                {!loadingCompetitions && competitions.length > 0 && (
+                  <View style={styles.reportChipRow}>
+                    {competitions.map((c) => {
+                      const selected = String(filters.competitionId) === String(c.competitionId);
+                      return (
+                        <TouchableOpacity
+                          key={c.competitionId}
+                          activeOpacity={0.75}
+                          style={[styles.reportChip, selected && styles.reportChipSelected]}
+                          onPress={() => updateFilter('competitionId', String(c.competitionId))}
+                        >
+                          <Text style={[styles.reportChipText, selected && styles.reportChipTextSelected]}>
+                            {c.competitionName}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
+
+            {isScout && (
+              <>
+                <Text style={styles.reportSectionLabel}>Athletes to Include</Text>
+                <View style={styles.reportChipRow}>
+                  {REPORT_SCOPES.map((s) => {
+                    const selected = filters.scope === s.id;
+                    return (
+                      <TouchableOpacity
+                        key={s.id}
+                        activeOpacity={0.75}
+                        style={[styles.reportChip, selected && styles.reportChipSelected]}
+                        onPress={() => updateFilter('scope', s.id)}
+                      >
+                        <Text style={[styles.reportChipText, selected && styles.reportChipTextSelected]}>
+                          {s.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {filters.scope === 'Watchlist' && (
+                  <View style={styles.reportField}>
+                    <Text style={styles.reportFieldLabel}>Shortlist Tag (optional)</Text>
+                    <TextInput
+                      style={styles.reportInput}
+                      placeholder="e.g. Priority, Prospect"
+                      placeholderTextColor={COLORS.gray400}
+                      value={filters.tag}
+                      onChangeText={(text) => updateFilter('tag', text)}
+                    />
+                  </View>
+                )}
+              </>
+            )}
+
+            {isCoach && (
+              <>
+                <Text style={styles.reportSectionLabel}>Match Type</Text>
+                <View style={styles.reportChipRow}>
+                  {MATCH_TYPES.map((t) => {
+                    const selected = filters.matchType === t.id;
+                    return (
+                      <TouchableOpacity
+                        key={t.id || 'all'}
+                        activeOpacity={0.75}
+                        style={[styles.reportChip, selected && styles.reportChipSelected]}
+                        onPress={() => updateFilter('matchType', t.id)}
+                      >
+                        <Text style={[styles.reportChipText, selected && styles.reportChipTextSelected]}>
+                          {t.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <Text style={styles.reportSectionLabel}>Result</Text>
+                <View style={styles.reportChipRow}>
+                  {MATCH_RESULTS.map((r) => {
+                    const selected = filters.result === r.id;
+                    return (
+                      <TouchableOpacity
+                        key={r.id || 'all'}
+                        activeOpacity={0.75}
+                        style={[styles.reportChip, selected && styles.reportChipSelected]}
+                        onPress={() => updateFilter('result', r.id)}
+                      >
+                        <Text style={[styles.reportChipText, selected && styles.reportChipTextSelected]}>
+                          {r.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
+            <Text style={styles.reportSectionLabel}>Match Date Range</Text>
+            <View style={styles.reportDateRow}>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                style={styles.reportDateButton}
+                onPress={() => setShowDateFromPicker(true)}
+              >
+                <Text style={styles.reportDateLabel}>From</Text>
+                <Text style={styles.reportDateValue}>{formatDate(filters.dateFrom)}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.75}
+                style={styles.reportDateButton}
+                onPress={() => setShowDateToPicker(true)}
+              >
+                <Text style={styles.reportDateLabel}>To</Text>
+                <Text style={styles.reportDateValue}>{formatDate(filters.dateTo)}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {showDateFromPicker && (
+              <DateTimePicker
+                value={filters.dateFrom || new Date()}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                onChange={(event, date) => {
+                  setShowDateFromPicker(false);
+                  if (date) updateFilter('dateFrom', date);
+                }}
+              />
+            )}
+
+            {showDateToPicker && (
+              <DateTimePicker
+                value={filters.dateTo || new Date()}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                onChange={(event, date) => {
+                  setShowDateToPicker(false);
+                  if (date) updateFilter('dateTo', date);
+                }}
+              />
+            )}
+
+            {isScout && (
+              <>
+                <Text style={styles.reportSectionLabel}>Filter Athletes By</Text>
+
+                <View style={styles.reportField}>
+                  <Text style={styles.reportFieldLabel}>Location</Text>
+                  <TextInput
+                    style={styles.reportInput}
+                    placeholder="e.g. Gauteng"
+                    placeholderTextColor={COLORS.gray400}
+                    value={filters.region}
+                    onChangeText={(text) => updateFilter('region', text)}
+                  />
+                </View>
+
+                <View style={styles.reportField}>
+                  <Text style={styles.reportFieldLabel}>Sport</Text>
+                  <TextInput
+                    style={styles.reportInput}
+                    placeholder="e.g. Soccer"
+                    placeholderTextColor={COLORS.gray400}
+                    value={filters.sport}
+                    onChangeText={(text) => updateFilter('sport', text)}
+                  />
+                </View>
+
+                <View style={styles.reportField}>
+                  <Text style={styles.reportFieldLabel}>Position</Text>
+                  <TextInput
+                    style={styles.reportInput}
+                    placeholder="e.g. Striker"
+                    placeholderTextColor={COLORS.gray400}
+                    value={filters.position}
+                    onChangeText={(text) => updateFilter('position', text)}
+                  />
+                </View>
+
+                <View style={styles.reportField}>
+                  <Text style={styles.reportFieldLabel}>Minimum Average Rating</Text>
+                  <TextInput
+                    style={styles.reportInput}
+                    placeholder="e.g. 7.5"
+                    placeholderTextColor={COLORS.gray400}
+                    value={filters.minimumRating}
+                    onChangeText={(text) => updateFilter('minimumRating', text.replace(/[^0-9.]/g, ''))}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </>
+            )}
+
+            <Text style={styles.reportSectionLabel}>Export Format</Text>
+            <View style={styles.reportChipRow}>
+              {[
+                { id: 'pdf', label: 'PDF' },
+                { id: 'excel', label: 'Excel' },
+              ].map((f) => {
+                const selected = filters.format === f.id;
+                return (
+                  <TouchableOpacity
+                    key={f.id}
+                    activeOpacity={0.75}
+                    style={[styles.reportChip, selected && styles.reportChipSelected]}
+                    onPress={() => updateFilter('format', f.id)}
+                  >
+                    <Text style={[styles.reportChipText, selected && styles.reportChipTextSelected]}>
+                      {f.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+
+          <TouchableOpacity
+            activeOpacity={0.75}
+            style={[styles.updatePasswordButton, generating && { opacity: 0.7 }]}
+            onPress={onGenerate}
+            disabled={generating}
+          >
+            {generating ? (
+              <ActivityIndicator color={COLORS.white} />
+            ) : (
+              <Text style={styles.updatePasswordText}>Generate Report</Text>
             )}
           </TouchableOpacity>
 
@@ -818,4 +1306,63 @@ const styles = StyleSheet.create({
 
   cancelPasswordButton: { width: '100%', height: 40, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   cancelPasswordText: { fontSize: 14, color: COLORS.gray500 },
+
+  reportModalSheet: { maxHeight: '88%' },
+  reportScroll: { maxHeight: 420, marginBottom: 8 },
+
+  reportSectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.gray500,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+
+  reportChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+
+  reportChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: COLORS.gray300,
+    backgroundColor: COLORS.white,
+  },
+
+  reportChipSelected: {
+    borderColor: COLORS.cyan,
+    backgroundColor: COLORS.cyanLight,
+  },
+
+  reportChipText: { fontSize: 13, fontWeight: '600', color: COLORS.gray700 },
+  reportChipTextSelected: { color: COLORS.cyanDark },
+
+  reportField: { marginBottom: 12 },
+  reportFieldLabel: { fontSize: 13, fontWeight: '600', color: COLORS.gray700, marginBottom: 6 },
+
+  reportInput: {
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    paddingHorizontal: 14,
+    fontSize: 14,
+    color: COLORS.black,
+  },
+
+  reportDateRow: { flexDirection: 'row', gap: 12, marginBottom: 4 },
+
+  reportDateButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: COLORS.gray300,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+
+  reportDateLabel: { fontSize: 11, color: COLORS.gray500, fontWeight: '600', marginBottom: 2 },
+  reportDateValue: { fontSize: 14, color: COLORS.black, fontWeight: '500' },
 });

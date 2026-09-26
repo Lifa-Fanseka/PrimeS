@@ -15,7 +15,7 @@ export default function LoadingScreen() {
       
 
       <LottieView
-        source={require('../../assets/Animations/LoadingAnimation.json')}
+        source={require('../components/loadingAnimation.json')}
         autoPlay
         loop
         style={{

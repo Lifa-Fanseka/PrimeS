@@ -87,6 +87,19 @@ function FeedPhoto({ uri }) {
   );
 }
 
+// Fisher-Yates shuffle — genuinely random, unbiased order every time,
+// unlike naive "sort by Math.random()" approaches which can skew
+// certain orderings more likely than others. Never mutates the
+// original array, so React's state updates stay predictable.
+function shuffleArray(array) {
+  const result = [...array];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
 export default function AthleteDashboard({ navigation }) {
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState('Home');
@@ -131,7 +144,7 @@ export default function AthleteDashboard({ navigation }) {
           api.get('/api/Message/conversations'),
         ]);
       setProfile(profileRes.data);
-      setFeed(feedRes.data);
+      setFeed(shuffleArray(feedRes.data));
       setMyMedia(myMediaRes.data);
       setMyStats(myStatsRes.data);
       setSuggestedScouts(scoutsRes.data.slice(0, 2));
@@ -465,9 +478,23 @@ export default function AthleteDashboard({ navigation }) {
     </Pressable>
   );
 
+  // The backend returns timestamps with no timezone marker (e.g.
+  // "2026-09-10T14:23:00"), which JavaScript's Date() misreads as
+  // local time instead of UTC — this is the exact same bug fixed in
+  // MessagesScreen earlier. Appending "Z" tells it to parse as UTC
+  // correctly, so a post from seconds ago shows "just now" instead
+  // of being artificially pushed hours into the past.
+  const toUtcDate = (dateString) => {
+    if (!dateString) return null;
+    const hasTimezone = /Z|[+-]\d{2}:?\d{2}$/.test(dateString);
+    return new Date(hasTimezone ? dateString : `${dateString}Z`);
+  };
+
   const formatTimeAgo = (dateString) => {
     if (!dateString) return '';
-    const diffMs = Date.now() - new Date(dateString).getTime();
+    const parsed = toUtcDate(dateString);
+    if (!parsed) return '';
+    const diffMs = Date.now() - parsed.getTime();
     const mins = Math.floor(diffMs / 60000);
     if (mins < 1) return 'just now';
     if (mins < 60) return `${mins}m ago`;

@@ -21,6 +21,9 @@ import ScoutDashboardScreen from './src/screens/ScoutDashboardScreen';
 import CoachDashboardScreen from './src/screens/CoachDashboardScreen';
 import ParentDashboard from './src/screens/ParentDashboard';
 import LeagueAdminDashboard from './src/screens/LeagueAdminDashboard';
+import ScoutFeedScreen from './src/screens/ScoutFeedScreen';
+import OfferDetailScreen from './src/screens/OfferDetailScreen';
+
 
 const Stack = createNativeStackNavigator();
 
@@ -47,6 +50,8 @@ export default function App() {
           <Stack.Screen name="CoachDashboard" component={CoachDashboardScreen} />
           <Stack.Screen name="ParentDashboard" component={ParentDashboard} />
           <Stack.Screen name="LeagueAdminDashboard" component={LeagueAdminDashboard} />
+          <Stack.Screen name="ScoutFeed" component={ScoutFeedScreen} />
+          <Stack.Screen name="OfferDetail" component={OfferDetailScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>

@@ -11,22 +11,34 @@ import { useIsFocused } from '@react-navigation/native';
  * switching tabs) — otherwise the player keeps running in the
  * background since React Navigation often keeps prior screens mounted,
  * and audio would keep playing after leaving the page.
+ *
+ * Also accepts an externally-controlled `isActive` prop, for contexts
+ * like a vertically-swipeable feed where many VideoPlayer instances
+ * can be mounted on the same screen at once (List virtualization keeps
+ * neighbors mounted for smooth scrolling) — the screen itself never
+ * loses focus while swiping between them, so `useIsFocused` alone
+ * can't tell which one should actually be playing. The parent screen
+ * sets `isActive={true}` only on whichever item is currently centered.
+ * Defaults to true so every existing usage elsewhere in the app is
+ * unaffected — this only matters when a parent explicitly passes it.
  */
-export default function VideoPlayer({ uri, autoPlay = true, style }) {
+export default function VideoPlayer({ uri, autoPlay = true, isActive = true, nativeControls = true, style }) {
   const isFocused = useIsFocused();
 
   const player = useVideoPlayer(uri, (player) => {
     player.loop = false;
-    if (autoPlay) {
+    if (autoPlay && isActive) {
       player.play();
     }
   });
 
   useEffect(() => {
-    if (!isFocused) {
+    if (!isFocused || !isActive) {
       player.pause();
+    } else if (isActive && autoPlay) {
+      player.play();
     }
-  }, [isFocused, player]);
+  }, [isFocused, isActive, autoPlay, player]);
 
   return (
     <VideoView
@@ -34,7 +46,7 @@ export default function VideoPlayer({ uri, autoPlay = true, style }) {
       player={player}
       fullscreenOptions={{ enable: true }}
       allowsPictureInPicture
-      nativeControls
+      nativeControls={nativeControls}
     />
   );
 }

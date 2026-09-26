@@ -10,6 +10,7 @@ import {
   Alert,
   Platform,
   KeyboardAvoidingView,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
@@ -17,7 +18,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { login } from '../api/auth';
-import LoadingScreen from '../components/LoadingScreen';
 
 const REMEMBERED_EMAIL_KEY = 'rememberedEmail';
 
@@ -68,6 +68,14 @@ export default function LoginScreen() {
     LeagueAdmin: 'LeagueAdminDashboard',
   };
 
+  // Small spinner on the button while credentials are being checked —
+  // the form stays visible and interactive, so a wrong-password error
+  // just shows right back on the same screen rather than being masked
+  // by a full-screen takeover. The bigger, full-screen Lottie animation
+  // is reserved for the dashboard's own initial load right after —
+  // that's already wired up on the destination screen itself, so once
+  // navigation.reset() fires here, the handoff into that animation
+  // happens automatically without anything further needed in this file.
   const handleLogin = async () => {
     if (!validateForm()) return;
     setSubmitting(true);
@@ -104,11 +112,11 @@ export default function LoginScreen() {
       } else {
         Alert.alert('Login Failed', 'Something went wrong. Please try again.');
       }
-      
-
-    } finally {
       setSubmitting(false);
     }
+    // Deliberately not resetting submitting in a `finally` here — on
+    // success, we navigate away entirely, so there's no screen left to
+    // un-spin the button on; only the error path needs to restore it.
   };
 
   const renderInput = (
@@ -139,13 +147,6 @@ export default function LoginScreen() {
       ) : null}
     </View>
   );
-
-  // Full-screen takeover while logging in — replaces the whole form,
-  // not just a spinner inside the button, so it reads as "loading into
-  // the app" rather than "the button is busy."
-  if (submitting) {
-    return <LoadingScreen label="Logging in..." />;
-  }
 
   return (
     <View style={styles.screen}>
@@ -233,10 +234,16 @@ export default function LoginScreen() {
               style={({ pressed }) => [
                 styles.loginButton,
                 pressed && styles.loginButtonPressed,
+                submitting && styles.loginButtonDisabled,
               ]}
               onPress={handleLogin}
+              disabled={submitting}
             >
-              <Text style={styles.loginButtonText}>Login</Text>
+              {submitting ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.loginButtonText}>Login</Text>
+              )}
             </Pressable>
             <View style={styles.signUpRow}>
               <Text style={styles.signUpText}>Don't have an account? </Text>
@@ -379,6 +386,9 @@ const styles = StyleSheet.create({
   },
   loginButtonPressed: {
     backgroundColor: '#0891B2',
+  },
+  loginButtonDisabled: {
+    opacity: 0.8,
   },
   loginButtonText: {
     color: '#FFFFFF',

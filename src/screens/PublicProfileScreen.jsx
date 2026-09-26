@@ -10,12 +10,17 @@ import {
   ActivityIndicator,
   Dimensions,
   Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../api/client';
+import { pickAndUploadDocument } from '../MediaService/Upload';
 import VideoPlayer from '../components/VideoPlayer';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -150,23 +155,82 @@ export default function PublicProfileScreen({ navigation, route }) {
     navigation.navigate('Messages', { recipientId: profile.userId, recipientName: profile.name });
   };
 
-  const handleSendOffer = () => {
-    Alert.alert('Send Recruitment Offer', `Send a recruitment offer to ${profile.name}?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Send Offer',
-        onPress: async () => {
-          try {
-            await api.post(`/api/Scout/offers/${id}`, {
-              offerMessage: `Interested in recruiting ${profile.name}.`,
-            });
-            Alert.alert('Offer Sent', `Recruitment offer sent to ${profile.name}!`);
-          } catch (err) {
-            Alert.alert('Error', err?.response?.data ?? 'Could not send the offer.');
-          }
-        },
-      },
-    ]);
+  // ---- Send Offer form — same pattern as ScoutDashboardScreen ----
+  const [sendOfferModal, setSendOfferModal] = useState(false);
+  const [offerTitle, setOfferTitle] = useState('');
+  const [offerEventDate, setOfferEventDate] = useState(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [offerLocation, setOfferLocation] = useState('');
+  const [offerAttachmentUrl, setOfferAttachmentUrl] = useState('');
+  const [offerAttachmentName, setOfferAttachmentName] = useState('');
+  const [pickingDocument, setPickingDocument] = useState(false);
+  const [documentProgress, setDocumentProgress] = useState(0);
+  const [offerSubmitting, setOfferSubmitting] = useState(false);
+
+  const openSendOfferModal = () => {
+    setOfferTitle('');
+    setOfferEventDate(null);
+    setShowDatePicker(false);
+    setOfferLocation('');
+    setOfferAttachmentUrl('');
+    setOfferAttachmentName('');
+    setSendOfferModal(true);
+  };
+
+  const formatDateForApi = (date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const formatDateForDisplay = (date) => {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const onDateChange = (event, selectedDate) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setOfferEventDate(selectedDate);
+    }
+  };
+
+  const handlePickDocument = async () => {
+    try {
+      setPickingDocument(true);
+      setDocumentProgress(0);
+      const result = await pickAndUploadDocument(setDocumentProgress);
+      if (result) {
+        setOfferAttachmentUrl(result.url);
+        setOfferAttachmentName(result.name);
+      }
+    } catch (err) {
+      Alert.alert('Upload Failed', err?.message || 'Could not upload the document.');
+    } finally {
+      setPickingDocument(false);
+    }
+  };
+
+  const submitOffer = async () => {
+    if (!offerTitle.trim()) {
+      Alert.alert('Missing Title', 'Please enter a title for this offer.');
+      return;
+    }
+    setOfferSubmitting(true);
+    try {
+      await api.post(`/api/Scout/offers/${id}`, {
+        title: offerTitle.trim(),
+        eventDate: offerEventDate ? formatDateForApi(offerEventDate) : null,
+        location: offerLocation.trim() || null,
+        attachmentUrl: offerAttachmentUrl || null,
+      });
+      Alert.alert('Offer Sent', `Recruitment offer sent to ${profile.name}!`);
+      setSendOfferModal(false);
+    } catch (err) {
+      Alert.alert('Error', err?.response?.data ?? 'Could not send the offer.');
+    } finally {
+      setOfferSubmitting(false);
+    }
   };
 
   if (loading || !profile) {
@@ -254,7 +318,7 @@ export default function PublicProfileScreen({ navigation, route }) {
           </TouchableOpacity>
         </View>
         {canSendOffer && (
-          <TouchableOpacity activeOpacity={0.75} style={styles.offerButton} onPress={handleSendOffer}>
+          <TouchableOpacity activeOpacity={0.75} style={styles.offerButton} onPress={openSendOfferModal}>
             <Feather name="send" size={16} color={COLORS.cyan} />
             <Text style={styles.offerButtonText}>Send Recruitment Offer</Text>
           </TouchableOpacity>
@@ -331,6 +395,110 @@ export default function PublicProfileScreen({ navigation, route }) {
             <VideoPlayer uri={videoPlaybackUrl} style={styles.videoPlaybackPlayer} />
           )}
         </View>
+      </Modal>
+
+      <Modal
+        visible={sendOfferModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSendOfferModal(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.offerModalBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={styles.offerSheet}>
+            <View style={styles.offerSheetHandle} />
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={styles.offerSheetTitle}>Send Recruitment Offer</Text>
+              <Text style={styles.offerSheetSubtitle}>To {profile.name}</Text>
+
+              <Text style={styles.offerFieldLabel}>Title</Text>
+              <View style={styles.offerFieldRow}>
+                <Ionicons name="document-text-outline" size={18} color={COLORS.gray500} style={styles.offerFieldIcon} />
+                <TextInput
+                  style={styles.offerFieldInput}
+                  placeholder="e.g. Official U-19 Summer Trial Invite"
+                  placeholderTextColor={COLORS.gray400}
+                  value={offerTitle}
+                  onChangeText={setOfferTitle}
+                />
+              </View>
+
+              <Text style={styles.offerFieldLabel}>Event Date</Text>
+              <TouchableOpacity
+                style={styles.offerFieldRow}
+                onPress={() => setShowDatePicker(true)}
+                activeOpacity={0.75}
+              >
+                <Ionicons name="calendar-outline" size={18} color={COLORS.gray500} style={styles.offerFieldIcon} />
+                <Text style={[styles.offerFieldDateText, !offerEventDate && styles.offerFieldPlaceholder]}>
+                  {offerEventDate ? formatDateForDisplay(offerEventDate) : 'Select event date'}
+                </Text>
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  value={offerEventDate || new Date()}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                  onChange={onDateChange}
+                  minimumDate={new Date()}
+                />
+              )}
+              {Platform.OS === 'ios' && showDatePicker && (
+                <TouchableOpacity style={styles.dateDoneBtn} onPress={() => setShowDatePicker(false)}>
+                  <Text style={styles.dateDoneBtnText}>Done</Text>
+                </TouchableOpacity>
+              )}
+
+              <Text style={styles.offerFieldLabel}>Location</Text>
+              <View style={styles.offerFieldRow}>
+                <Ionicons name="location-outline" size={18} color={COLORS.gray500} style={styles.offerFieldIcon} />
+                <TextInput
+                  style={styles.offerFieldInput}
+                  placeholder="e.g. City Football Academy, Manchester"
+                  placeholderTextColor={COLORS.gray400}
+                  value={offerLocation}
+                  onChangeText={setOfferLocation}
+                />
+              </View>
+
+              <Text style={styles.offerFieldLabel}>Offer Document (optional)</Text>
+              <TouchableOpacity
+                style={styles.attachButton}
+                onPress={handlePickDocument}
+                disabled={pickingDocument}
+                activeOpacity={0.75}
+              >
+                <Ionicons name="attach-outline" size={18} color={COLORS.cyan} />
+                {pickingDocument ? (
+                  <Text style={styles.attachButtonText}>Uploading... {documentProgress}%</Text>
+                ) : offerAttachmentName ? (
+                  <Text style={styles.attachButtonText} numberOfLines={1}>{offerAttachmentName}</Text>
+                ) : (
+                  <Text style={styles.attachButtonText}>Attach Offer Document (PDF)</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.submitOfferBtn, offerSubmitting && { opacity: 0.7 }]}
+                onPress={submitOffer}
+                disabled={offerSubmitting}
+                activeOpacity={0.85}
+              >
+                {offerSubmitting ? (
+                  <ActivityIndicator color={COLORS.white} />
+                ) : (
+                  <Text style={styles.submitOfferBtnText}>Send Offer</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={() => setSendOfferModal(false)} style={styles.cancelOfferBtn}>
+                <Text style={styles.cancelOfferBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
@@ -538,4 +706,68 @@ const styles = StyleSheet.create({
   highlightMetaRow: { flexDirection: 'row', gap: responsive(10), marginTop: responsive(6) },
   highlightDate: { fontSize: responsive(11), color: COLORS.gray500 },
   highlightViews: { fontSize: responsive(11), color: COLORS.gray500 },
-}); 
+  offerModalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  offerSheet: {
+    maxHeight: '88%',
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: responsive(20),
+    borderTopRightRadius: responsive(20),
+    paddingHorizontal: responsive(20),
+    paddingTop: responsive(10),
+    paddingBottom: Platform.OS === 'ios' ? responsive(30) : responsive(20),
+  },
+  offerSheetHandle: {
+    width: responsive(40),
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: COLORS.gray300,
+    alignSelf: 'center',
+    marginBottom: responsive(14),
+  },
+  offerSheetTitle: { fontSize: responsive(18), fontWeight: '800', color: COLORS.black },
+  offerSheetSubtitle: { fontSize: responsive(13), color: COLORS.gray500, marginTop: responsive(2), marginBottom: responsive(16) },
+  offerFieldLabel: { fontSize: responsive(13), fontWeight: '700', color: COLORS.gray700, marginBottom: responsive(6) },
+  offerFieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.gray200,
+    borderRadius: responsive(10),
+    paddingHorizontal: responsive(12),
+    marginBottom: responsive(14),
+  },
+  offerFieldIcon: { marginRight: responsive(8) },
+  offerFieldInput: { flex: 1, height: responsive(46), fontSize: responsive(14), color: COLORS.black },
+  offerFieldDateText: { flex: 1, fontSize: responsive(14), color: COLORS.black, paddingVertical: responsive(14) },
+  offerFieldPlaceholder: { color: COLORS.gray400 },
+  dateDoneBtn: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: responsive(16),
+    paddingVertical: responsive(8),
+    marginBottom: responsive(14),
+  },
+  dateDoneBtnText: { fontSize: responsive(14), fontWeight: '700', color: COLORS.cyan },
+  attachButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: responsive(8),
+    borderWidth: 1.5,
+    borderColor: COLORS.cyan,
+    borderStyle: 'dashed',
+    borderRadius: responsive(10),
+    paddingVertical: responsive(12),
+    paddingHorizontal: responsive(14),
+    marginBottom: responsive(20),
+  },
+  attachButtonText: { flex: 1, fontSize: responsive(13), fontWeight: '600', color: COLORS.cyan },
+  submitOfferBtn: {
+    height: responsive(50),
+    backgroundColor: COLORS.cyan,
+    borderRadius: responsive(25),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitOfferBtnText: { fontSize: responsive(15), fontWeight: '700', color: COLORS.white },
+  cancelOfferBtn: { alignItems: 'center', paddingVertical: responsive(14) },
+  cancelOfferBtnText: { fontSize: responsive(14), fontWeight: '600', color: COLORS.gray500 },
+});

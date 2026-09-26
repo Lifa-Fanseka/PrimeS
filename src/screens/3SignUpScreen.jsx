@@ -17,6 +17,7 @@ import { useNavigation } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { register } from '../api/auth';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import LoadingScreen from '../components/LoadingScreen'
 
 function calculateAge(dob) {
   if (!dob) return null;
