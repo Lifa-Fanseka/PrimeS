@@ -4,8 +4,10 @@ import * as DocumentPicker from 'expo-document-picker';
 const CLOUD_NAME = 'mx6a0ypj';
 const UPLOAD_PRESET = 'primeScout_MediaUploads';
 
-
-const MIN_VIDEO_DURATION_MS = 60 * 1000;       // 60 seconds
+// Highlight video limits — enforced right after picking, before any
+// upload starts, so an out-of-range video never wastes bandwidth or
+// time being uploaded just to be rejected afterward.
+const MIN_VIDEO_DURATION_MS = 20 * 1000;       // 20 seconds
 const MAX_VIDEO_DURATION_MS = 3 * 60 * 1000;   // 3 minutes
 const MAX_VIDEO_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
 
@@ -49,7 +51,7 @@ export async function pickVideo() {
 
   if (durationMs != null) {
     if (durationMs < MIN_VIDEO_DURATION_MS) {
-      throw new Error('Highlight videos must be at least 60 seconds long.');
+      throw new Error('Highlight videos must be at least 20 seconds long.');
     }
     if (durationMs > MAX_VIDEO_DURATION_MS) {
       throw new Error('Highlight videos can be a maximum of 3 minutes long.');

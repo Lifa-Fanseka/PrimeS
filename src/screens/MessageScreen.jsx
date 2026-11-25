@@ -23,6 +23,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Clipboard from 'expo-clipboard';
 
 import {
   useFonts,
@@ -82,32 +83,12 @@ function avatarColorFor(id) {
    TIME HELPERS
 ========================================================= */
 
-/*
- * The backend sends dateSent without an explicit timezone marker
- * (no trailing "Z" or "+HH:MM" offset). JavaScript's Date parser
- * treats a string like that as LOCAL time, not UTC — so every
- * timestamp silently shifts by the device's UTC offset. That's
- * exactly why a message sent "just now" was showing as "2h" in
- * the conversation list for anyone outside UTC (e.g. South Africa,
- * UTC+2): the parsed instant ends up ~2 hours in the past.
- *
- * Fix: if the string has no timezone info, treat it as UTC by
- * appending "Z" before parsing. Every place that parses a raw
- * server timestamp goes through this function instead of calling
- * `new Date(...)` directly.
- */
-function toUtcDate(dateString) {
-  if (!dateString) return null;
-  const hasTimezone = /Z$|[+-]\d{2}:?\d{2}$/.test(dateString);
-  return new Date(hasTimezone ? dateString : `${dateString}Z`);
-}
-
 function formatShortTime(dateString) {
   if (!dateString) return '';
 
   const diffMs =
     Date.now() -
-    toUtcDate(dateString).getTime();
+    new Date(dateString).getTime();
 
   const mins = Math.floor(
     diffMs / 60000
@@ -133,7 +114,7 @@ function formatShortTime(dateString) {
 function formatBubbleTime(dateString) {
   if (!dateString) return '';
 
-  return toUtcDate(dateString).toLocaleTimeString(
+  return new Date(dateString).toLocaleTimeString(
     'en-US',
     {
       hour: 'numeric',
@@ -144,13 +125,13 @@ function formatBubbleTime(dateString) {
 }
 
 function dayKey(dateString) {
-  const d = toUtcDate(dateString);
+  const d = new Date(dateString);
 
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
 function dateChipLabel(dateString) {
-  const d = toUtcDate(dateString);
+  const d = new Date(dateString);
 
   const today = new Date();
 
@@ -231,8 +212,26 @@ export default function MessagesScreen({
   navigation,
   route,
 }) {
+  /*
+   * IMPORTANT:
+   *
+   * We use the actual device safe-area measurements.
+   *
+   * This protects the UI from:
+   *
+   * - iPhone notch
+   * - Dynamic Island
+   * - status/notification bar
+   * - Android status bar
+   * - home indicator
+   * - Android navigation bar
+   */
   const insets = useSafeAreaInsets();
 
+  /*
+   * Automatically updates if the device rotates
+   * or its window dimensions change.
+   */
   const {
     width: screenWidth,
   } = useWindowDimensions();
@@ -267,6 +266,11 @@ export default function MessagesScreen({
   const [myUserId, setMyUserId] =
     useState(null);
 
+  /*
+   * Ref always contains the latest user ID.
+   *
+   * This prevents stale socket callbacks.
+   */
   const myUserIdRef =
     useRef(null);
 
@@ -292,6 +296,10 @@ export default function MessagesScreen({
   const [searchQuery, setSearchQuery] =
     useState('');
 
+  const [showCopiedToast, setShowCopiedToast] =
+    useState(false);
+  const copiedToastTimer = useRef(null);
+
   /* =======================================================
      DATA
   ======================================================= */
@@ -315,6 +323,10 @@ export default function MessagesScreen({
   const [connected, setConnected] =
     useState(false);
 
+  /*
+   * Real online/offline presence for whoever
+   * the currently-open thread is with.
+   */
   const [otherOnline, setOtherOnline] =
     useState(false);
 
@@ -464,6 +476,10 @@ export default function MessagesScreen({
             ? dto.receiverId
             : dto.senderId;
 
+        /*
+         * Add message to history
+         */
+
         setAllMessages(
           (prev) => ({
             ...prev,
@@ -477,6 +493,12 @@ export default function MessagesScreen({
           })
         );
 
+        /*
+         * Unread handling — real count, driven by
+         * the backend (see GetConversations UnreadCount),
+         * kept accurate here between REST refreshes.
+         */
+
         const isIncoming =
           dto.senderId !==
           currentUserId;
@@ -485,6 +507,10 @@ export default function MessagesScreen({
           selectedConversationRef.current ===
             otherUserId &&
           view === 'thread';
+
+        /*
+         * Update conversation preview + unread count
+         */
 
         setConversations(
           (prev) => {
@@ -550,15 +576,29 @@ export default function MessagesScreen({
 
             return updated.sort(
               (a, b) =>
-                toUtcDate(b.lastMessageDate) -
-                toUtcDate(a.lastMessageDate)
+                new Date(
+                  b.lastMessageDate
+                ) -
+                new Date(
+                  a.lastMessageDate
+                )
             );
           }
         );
 
+        /*
+         * If this thread is open right now and the message
+         * is incoming, mark it read immediately — this also
+         * pushes a live read receipt back to the sender.
+         */
+
         if (isCurrentlyOpen && isIncoming) {
           markThreadAsRead(otherUserId).catch(() => {});
         }
+
+        /*
+         * Scroll if current conversation
+         */
 
         if (
           selectedConversationRef.current ===
@@ -614,6 +654,17 @@ export default function MessagesScreen({
   useEffect(() => {
     let mounted = true;
 
+    /*
+     * IMPORTANT: this screen no longer opens or closes the chat
+     * socket itself — that connection is started once, right
+     * after login (see api/auth.js), and lives for the whole
+     * session. Here we only ATTACH listeners to whatever
+     * connection already exists, and detach them on unmount.
+     * This is what avoids the "stop() called before start()
+     * finished" race that happened when connect/disconnect were
+     * tied to this screen's mount/unmount.
+     */
+
     const removeMessageListener =
       addMessageListener(
         handleIncomingMessage
@@ -654,6 +705,11 @@ export default function MessagesScreen({
           await loadConversations();
 
         if (!mounted) return;
+
+        /*
+         * Handle recipient passed
+         * from another screen.
+         */
 
         const recipientId =
           route?.params
@@ -743,6 +799,12 @@ export default function MessagesScreen({
 
         setView('thread');
 
+        /*
+         * Zero the unread count locally, and tell the
+         * backend these messages are read — this also
+         * pushes a live read receipt to the sender.
+         */
+
         setConversations(
           (prev) =>
             prev.map((c) =>
@@ -754,9 +816,17 @@ export default function MessagesScreen({
 
         markThreadAsRead(otherUserId).catch(() => {});
 
+        /*
+         * Real online/offline check for this contact.
+         */
+
         checkOnline(otherUserId)
           .then(setOtherOnline)
           .catch(() => setOtherOnline(false));
+
+        /*
+         * Load history if needed
+         */
 
         if (
           !allMessages[
@@ -767,6 +837,10 @@ export default function MessagesScreen({
             otherUserId
           );
         }
+
+        /*
+         * Scroll to bottom
+         */
 
         setTimeout(() => {
           flatListRef.current?.scrollToEnd(
@@ -816,6 +890,12 @@ export default function MessagesScreen({
       setMessageInput('');
 
       try {
+        /*
+         * The socket echoes the message
+         * back to us, so we don't add
+         * an optimistic message here.
+         */
+
         await sendChatMessage(
           selectedConversationId,
           text
@@ -978,6 +1058,31 @@ export default function MessagesScreen({
     };
 
   /* =======================================================
+     COPY MESSAGE
+  ======================================================= */
+
+  const handleCopyMessage = useCallback((text) => {
+    if (!text) return;
+    Clipboard.setStringAsync(text);
+
+    setShowCopiedToast(true);
+    if (copiedToastTimer.current) {
+      clearTimeout(copiedToastTimer.current);
+    }
+    copiedToastTimer.current = setTimeout(() => {
+      setShowCopiedToast(false);
+    }, 1400);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (copiedToastTimer.current) {
+        clearTimeout(copiedToastTimer.current);
+      }
+    };
+  }, []);
+
+  /* =======================================================
      MESSAGE ROW
   ======================================================= */
 
@@ -997,6 +1102,10 @@ export default function MessagesScreen({
 
   const renderThreadItem =
     ({ item }) => {
+      /*
+       * Date separator chip ("Today" / "Yesterday" / etc.)
+       */
+
       if (item.type === 'date') {
         return (
           <View
@@ -1048,7 +1157,14 @@ export default function MessagesScreen({
               },
             ]}
           >
-            <View
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onLongPress={() =>
+                handleCopyMessage(
+                  msg.messageText
+                )
+              }
+              delayLongPress={350}
               style={[
                 styles.bubble,
 
@@ -1073,7 +1189,7 @@ export default function MessagesScreen({
               >
                 {msg.messageText}
               </Text>
-            </View>
+            </TouchableOpacity>
           </View>
 
           {isLastInGroup && (
@@ -1094,6 +1210,11 @@ export default function MessagesScreen({
         </View>
       );
     };
+
+  /*
+   * Read receipt — shown under the very last message
+   * in the thread, only if it's mine and it's been read.
+   */
 
   const lastMessage =
     (
@@ -1121,6 +1242,10 @@ export default function MessagesScreen({
           styles.safeArea,
           styles.center,
 
+          /*
+           * Explicitly protect the
+           * loading screen as well.
+           */
           {
             paddingTop:
               insets.top,
@@ -1168,6 +1293,13 @@ export default function MessagesScreen({
               : 'height'
           }
 
+          /*
+           * We manually apply the
+           * top safe area to the header.
+           *
+           * Therefore we don't add
+           * another top offset here.
+           */
           keyboardVerticalOffset={0}
         >
 
@@ -1179,6 +1311,12 @@ export default function MessagesScreen({
             style={[
               styles.threadHeader,
 
+              /*
+               * THIS IS THE IMPORTANT FIX.
+               *
+               * The header starts BELOW the
+               * notification/status area.
+               */
               {
                 paddingTop:
                   insets.top + 12,
@@ -1307,6 +1445,10 @@ export default function MessagesScreen({
                   : 'on-drag'
               }
 
+              /*
+               * Allows iOS to adjust the
+               * list when keyboard appears.
+               */
               automaticallyAdjustKeyboardInsets={
                 Platform.OS === 'ios'
               }
@@ -1373,6 +1515,12 @@ export default function MessagesScreen({
             style={[
               styles.inputBar,
 
+              /*
+               * Protect the input from:
+               *
+               * - iPhone home indicator
+               * - Android navigation bar
+               */
               {
                 paddingBottom:
                   Math.max(
@@ -1453,6 +1601,12 @@ export default function MessagesScreen({
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
+
+        {showCopiedToast && (
+          <View style={styles.copiedToast} pointerEvents="none">
+            <Text style={styles.copiedToastText}>Copied</Text>
+          </View>
+        )}
       </View>
     );
   }
@@ -1474,6 +1628,12 @@ export default function MessagesScreen({
         style={[
           styles.listHeader,
 
+          /*
+           * THIS IS THE OTHER IMPORTANT FIX.
+           *
+           * Messages now starts BELOW the
+           * notification/status area.
+           */
           {
             paddingTop:
               insets.top + 12,
@@ -1607,6 +1767,9 @@ export default function MessagesScreen({
             paddingHorizontal:
               horizontalPadding,
 
+            /*
+             * Protect bottom of list.
+             */
             paddingBottom:
               24 +
               insets.bottom,
@@ -1658,6 +1821,11 @@ const F = {
 
 const styles =
   StyleSheet.create({
+
+    /* ===============================================
+       GENERAL
+    =============================================== */
+
     safeArea: {
       flex: 1,
       backgroundColor:
@@ -1676,7 +1844,36 @@ const styles =
         'center',
     },
 
+    copiedToast: {
+      position: 'absolute',
+      alignSelf: 'center',
+      bottom: 90,
+      backgroundColor: 'rgba(0,0,0,0.8)',
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 20,
+    },
+
+    copiedToastText: {
+      color: COLORS.white,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+
+    /* ===============================================
+       LIST HEADER
+    =============================================== */
+
     listHeader: {
+      /*
+       * paddingTop is supplied dynamically:
+       *
+       * insets.top + 12
+       *
+       * This prevents Messages from
+       * touching the notification bar.
+       */
+
       paddingBottom: 10,
 
       backgroundColor:
@@ -1724,6 +1921,10 @@ const styles =
         COLORS.black,
     },
 
+    /* ===============================================
+       SEARCH
+    =============================================== */
+
     searchWrap: {
       flexDirection:
         'row',
@@ -1762,6 +1963,10 @@ const styles =
 
       paddingVertical: 0,
     },
+
+    /* ===============================================
+       CONVERSATION LIST
+    =============================================== */
 
     listContent: {
       flexGrow: 1,
@@ -1926,12 +2131,27 @@ const styles =
         COLORS.white,
     },
 
+    /* ===============================================
+       CHAT HEADER
+    =============================================== */
+
     threadHeader: {
       flexDirection:
         'row',
 
       alignItems:
         'center',
+
+      /*
+       * IMPORTANT:
+       *
+       * paddingTop is supplied dynamically:
+       *
+       * insets.top + 12
+       *
+       * This keeps the avatar and person's
+       * name below the notification/status bar.
+       */
 
       paddingHorizontal: 16,
 
@@ -1984,6 +2204,10 @@ const styles =
 
       marginTop: 1,
     },
+
+    /* ===============================================
+       MESSAGES
+    =============================================== */
 
     messagesContent: {
       flexGrow: 1,
@@ -2153,6 +2377,10 @@ const styles =
         COLORS.gray400,
     },
 
+    /* ===============================================
+       MESSAGE INPUT
+    =============================================== */
+
     inputBar: {
       flexDirection:
         'row',
@@ -2163,6 +2391,15 @@ const styles =
       paddingHorizontal: 16,
 
       paddingTop: 10,
+
+      /*
+       * paddingBottom is supplied dynamically:
+       *
+       * Math.max(insets.bottom, 10)
+       *
+       * This protects the input from the
+       * iPhone home indicator / Android nav bar.
+       */
 
       backgroundColor:
         COLORS.white,

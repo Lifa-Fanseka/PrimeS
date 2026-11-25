@@ -61,13 +61,36 @@ function formatDate(dateString) {
   }
 }
 
+// A match counts as "past" purely by date — once its playing date has
+// gone by it moves out of Upcoming and into Previous Matches, whether or
+// not the coach has entered a result for it yet.
+function isPastDate(dateString) {
+  if (!dateString) return false;
+  const matchDate = new Date(dateString);
+  if (Number.isNaN(matchDate.getTime())) return false;
+
+  const today = new Date();
+  matchDate.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  return matchDate < today;
+}
+
+function resultBadgeStyle(result) {
+  if (result === 'Win') return { bg: '#DCFCE7', fg: COLORS.green, letter: 'W' };
+  if (result === 'Loss') return { bg: '#FEE2E2', fg: COLORS.red, letter: 'L' };
+  if (result === 'Draw') return { bg: COLORS.gray100, fg: COLORS.gray600, letter: 'D' };
+  return { bg: COLORS.gray100, fg: COLORS.gray500, letter: '—' };
+}
+
 export default function MyTeamScreen({ navigation }) {
   const [myAthleteId, setMyAthleteId] = useState(null);
   const [team, setTeam] = useState(null);
   const [coach, setCoach] = useState(null);
   const [squad, setSquad] = useState([]);
+  const [matches, setMatches] = useState([]);
   const [upcomingMatch, setUpcomingMatch] = useState(null);
   const [showAllSquad, setShowAllSquad] = useState(false);
+  const [showAllPrevious, setShowAllPrevious] = useState(false);
   const [loading, setLoading] = useState(true);
   const [leaving, setLeaving] = useState(false);
 
@@ -93,8 +116,13 @@ export default function MyTeamScreen({ navigation }) {
         }
       }
 
+      setMatches(matchesRes.data);
+
+      // Upcoming = earliest match whose date hasn't passed yet. A match
+      // with a passed date never counts as "upcoming" even without a
+      // result recorded — it belongs in Previous Matches instead.
       const upcoming = matchesRes.data
-        .filter((m) => !m.result)
+        .filter((m) => !isPastDate(m.matchDate))
         .sort((a, b) => new Date(a.matchDate) - new Date(b.matchDate))[0];
       setUpcomingMatch(upcoming ?? null);
     } catch (err) {
@@ -141,6 +169,11 @@ export default function MyTeamScreen({ navigation }) {
 
   const visibleSquad = showAllSquad ? squad : squad.slice(0, 5);
 
+  const previousMatches = matches
+    .filter((m) => isPastDate(m.matchDate))
+    .sort((a, b) => new Date(b.matchDate) - new Date(a.matchDate));
+  const visiblePreviousMatches = showAllPrevious ? previousMatches : previousMatches.slice(0, 5);
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.header}>
@@ -178,7 +211,7 @@ export default function MyTeamScreen({ navigation }) {
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statCell}>
-            <Feather name="calendar" size={18} color={COLORS.cyan} />
+            <Text style={styles.statValue}>{matches.length}</Text>
             <Text style={styles.statLabel}>Matches</Text>
           </View>
         </View>
@@ -187,7 +220,11 @@ export default function MyTeamScreen({ navigation }) {
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>Head Coach</Text>
 
-            <View style={styles.coachCard}>
+            <TouchableOpacity
+              activeOpacity={0.75}
+              style={styles.coachCard}
+              onPress={() => navigation.navigate('PublicProfile', { type: 'Coach', id: team.coachId })}
+            >
               {coach.profilePhoto ? (
                 <Image source={{ uri: coach.profilePhoto }} style={styles.coachAvatar} />
               ) : (
@@ -201,14 +238,10 @@ export default function MyTeamScreen({ navigation }) {
                 <Text style={styles.coachTitle}>{coach.affiliation || 'Coach'}</Text>
               </View>
 
-              <TouchableOpacity
-                activeOpacity={0.75}
-                style={styles.coachArrow}
-                onPress={() => Alert.alert('Coming Soon', 'Coach profile detail view is not built yet.')}
-              >
+              <View style={styles.coachArrow}>
                 <Feather name="arrow-right" size={16} color={COLORS.white} />
-              </TouchableOpacity>
-            </View>
+              </View>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -227,7 +260,12 @@ export default function MyTeamScreen({ navigation }) {
             const isMe = player.athleteId === myAthleteId;
 
             return (
-              <View key={player.athleteId} style={[styles.playerRow, isMe && styles.playerRowMe]}>
+              <TouchableOpacity
+                key={player.athleteId}
+                activeOpacity={0.75}
+                style={[styles.playerRow, isMe && styles.playerRowMe]}
+                onPress={() => navigation.navigate('PublicProfile', { type: 'Athlete', id: player.athleteId })}
+              >
                 {player.profilePhoto ? (
                   <Image source={{ uri: player.profilePhoto }} style={styles.playerAvatar} />
                 ) : (
@@ -254,7 +292,7 @@ export default function MyTeamScreen({ navigation }) {
                     <Text style={styles.jerseyText}>{player.jerseyNumber}</Text>
                   </View>
                 )}
-              </View>
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -283,6 +321,47 @@ export default function MyTeamScreen({ navigation }) {
             >
               <Text style={styles.getReadyButtonText}>Get Ready</Text>
             </TouchableOpacity>
+          </View>
+        )}
+
+        {previousMatches.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.squadHeaderRow}>
+              <Text style={styles.sectionLabel}>Previous Matches ({previousMatches.length})</Text>
+
+              {previousMatches.length > 5 && (
+                <TouchableOpacity activeOpacity={0.75} onPress={() => setShowAllPrevious(!showAllPrevious)}>
+                  <Text style={styles.seeAllText}>{showAllPrevious ? 'Show less' : 'See all'}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {visiblePreviousMatches.map((match) => {
+              const badge = resultBadgeStyle(match.result);
+              const hasScore = match.yourScore != null && match.opponentScore != null;
+
+              return (
+                <View key={match.matchId} style={styles.previousMatchRow}>
+                  <View style={[styles.resultBadge, { backgroundColor: badge.bg }]}>
+                    <Text style={[styles.resultBadgeText, { color: badge.fg }]}>{badge.letter}</Text>
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.previousMatchOpponent}>vs {match.opponentTeam ?? 'Unknown'}</Text>
+                    <Text style={styles.previousMatchMeta}>
+                      {formatDate(match.matchDate)}
+                      {match.matchType ? `  •  ${match.matchType}` : ''}
+                    </Text>
+                  </View>
+
+                  {hasScore && (
+                    <Text style={styles.previousMatchScore}>
+                      {match.yourScore} - {match.opponentScore}
+                    </Text>
+                  )}
+                </View>
+              );
+            })}
           </View>
         )}
 
@@ -460,4 +539,29 @@ const styles = StyleSheet.create({
 
   leaveButton: { alignItems: 'center', marginTop: responsive(28), paddingVertical: responsive(10) },
   leaveButtonText: { color: COLORS.red, fontSize: responsive(14), fontWeight: '600' },
+
+  previousMatchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: responsive(12),
+    backgroundColor: COLORS.white,
+    borderRadius: responsive(12),
+    padding: responsive(12),
+    marginBottom: responsive(8),
+    borderWidth: 1,
+    borderColor: COLORS.gray100,
+  },
+
+  resultBadge: {
+    width: responsive(30),
+    height: responsive(30),
+    borderRadius: responsive(15),
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resultBadgeText: { fontSize: responsive(13), fontWeight: '800' },
+
+  previousMatchOpponent: { fontSize: responsive(14), fontWeight: '700', color: COLORS.black },
+  previousMatchMeta: { fontSize: responsive(12), color: COLORS.gray500, marginTop: responsive(2) },
+  previousMatchScore: { fontSize: responsive(14), fontWeight: '800', color: COLORS.black },
 });

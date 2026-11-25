@@ -19,9 +19,13 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../api/client';
+import { addMessageListener } from '../api/chat';
 import { pickAndUploadImage, pickAndUploadVideo } from '../MediaService/Upload';
 import VideoPlayer from '../components/VideoPlayer';
+import LoadingScreen from '../components/LoadingScreen';
 import { Image as ExpoImage } from 'expo-image';
 
 // Cloudinary generates a real video-frame thumbnail automatically
@@ -166,9 +170,45 @@ export default function AthleteDashboard({ navigation }) {
     }
   }, []);
 
+  // Runs on first mount AND every time this screen comes back into focus —
+  // e.g. returning here right after leaving a team on MyTeamScreen. Without
+  // the focus re-check, `hasTeam` stays stale (true) until the app is fully
+  // reloaded, so the "My Team" button keeps sending the athlete back into
+  // a screen that now 404s trying to fetch a team they no longer have.
+  useFocusEffect(
+    useCallback(() => {
+      loadAll();
+    }, [loadAll])
+  );
+
+  // Live unread-messages badge: bump the red dot the instant a message
+  // arrives over the existing chat socket (see ../api/chat), so it shows
+  // up immediately even while the athlete is sitting on this screen —
+  // no pull-to-refresh needed. The true count is re-synced from the
+  // server whenever this screen loads/refocuses (see loadAll above).
   useEffect(() => {
-    loadAll();
-  }, [loadAll]);
+    let mounted = true;
+    let removeListener = () => {};
+
+    (async () => {
+      const idStr = await AsyncStorage.getItem('userId');
+      const myUserId = idStr ? parseInt(idStr, 10) : null;
+      if (!mounted) return;
+
+      removeListener = addMessageListener((dto) => {
+        // Only count messages someone else sent us — not the echo of a
+        // message we just sent ourselves.
+        if (dto.senderId !== myUserId) {
+          setUnreadMessages((prev) => prev + 1);
+        }
+      });
+    })();
+
+    return () => {
+      mounted = false;
+      removeListener();
+    };
+  }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -555,11 +595,7 @@ export default function AthleteDashboard({ navigation }) {
   );
 
   if (loading) {
-    return (
-      <SafeAreaView style={[styles.screen, styles.centerLoading]}>
-        <ActivityIndicator size="large" color="#06B6D4" />
-      </SafeAreaView>
-    );
+    return <LoadingScreen />;
   }
 
   return (

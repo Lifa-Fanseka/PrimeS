@@ -14,8 +14,10 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../api/client';
+import { addMessageListener } from '../api/chat';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -286,8 +288,18 @@ export default function ParentDashboard({ navigation: navProp }) {
 
   const [loading, setLoading] = useState(true);
   const [loadingChild, setLoadingChild] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState(0);
 
   const goTo = (screen, params) => navigation.navigate(screen, params);
+
+  const loadUnreadMessages = useCallback(async () => {
+    try {
+      const res = await api.get('/api/Message/conversations');
+      setUnreadMessages(res.data.reduce((sum, c) => sum + (c.unreadCount || 0), 0));
+    } catch (err) {
+      console.error('Failed to load conversations:', err);
+    }
+  }, []);
 
   const loadSignupRequests = useCallback(async () => {
     try {
@@ -316,7 +328,43 @@ export default function ParentDashboard({ navigation: navProp }) {
   useEffect(() => {
     loadChildren();
     loadSignupRequests();
-  }, [loadChildren, loadSignupRequests]);
+    loadUnreadMessages();
+  }, [loadChildren, loadSignupRequests, loadUnreadMessages]);
+
+  // Re-check on every return to this screen — e.g. coming back from the
+  // Messages screen after reading a thread — so the badge stays accurate
+  // without needing a manual pull-to-refresh.
+  useFocusEffect(
+    useCallback(() => {
+      loadUnreadMessages();
+    }, [loadUnreadMessages])
+  );
+
+  // Live unread-messages badge: bump the moment a message arrives over
+  // the existing chat socket (see ../api/chat), so it shows up instantly
+  // even while sitting on this dashboard. The true count re-syncs from
+  // the server whenever this screen loads/refocuses (see above).
+  useEffect(() => {
+    let mounted = true;
+    let removeListener = () => {};
+
+    (async () => {
+      const idStr = await AsyncStorage.getItem('userId');
+      const myUserId = idStr ? parseInt(idStr, 10) : null;
+      if (!mounted) return;
+
+      removeListener = addMessageListener((dto) => {
+        if (dto.senderId !== myUserId) {
+          setUnreadMessages((prev) => prev + 1);
+        }
+      });
+    })();
+
+    return () => {
+      mounted = false;
+      removeListener();
+    };
+  }, []);
 
   const loadChildDetails = useCallback(async (athleteId) => {
     setLoadingChild(true);
@@ -472,6 +520,11 @@ export default function ParentDashboard({ navigation: navProp }) {
 
           <TouchableOpacity style={styles.iconBtn} onPress={() => handleTabPress('messages')} activeOpacity={0.7}>
             <Ionicons name="chatbubble-ellipses-outline" size={22} color="#374151" />
+            {unreadMessages > 0 && (
+              <View style={styles.msgBadge}>
+                <Text style={styles.msgBadgeText}>{unreadMessages > 9 ? '9+' : unreadMessages}</Text>
+              </View>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.iconBtn} onPress={handleSettings} activeOpacity={0.7}>
@@ -605,7 +658,7 @@ export default function ParentDashboard({ navigation: navProp }) {
       <View style={styles.bottomNav}>
         {[
           { tab: 'home', icon: 'home-outline', iconActive: 'home', label: 'Home', badge: false },
-          { tab: 'messages', icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', label: 'Messages', badge: false },
+          { tab: 'messages', icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', label: 'Messages', badge: unreadMessages > 0 },
           { tab: 'me', icon: 'person-outline', iconActive: 'person', label: 'Me', badge: false },
         ].map(item => (
           <TouchableOpacity key={item.tab} style={styles.navTab} onPress={() => handleTabPress(item.tab)} activeOpacity={0.7}>
@@ -661,6 +714,24 @@ const styles = StyleSheet.create({
     padding: responsive(8),
     borderRadius: responsive(8),
     position: 'relative',
+  },
+
+  msgBadge: {
+    position: 'absolute',
+    top: responsive(2),
+    right: responsive(2),
+    minWidth: responsive(16),
+    height: responsive(16),
+    borderRadius: responsive(8),
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: responsive(3),
+  },
+  msgBadgeText: {
+    color: '#ffffff',
+    fontSize: responsive(9),
+    fontWeight: '800',
   },
 
   badgeDot: {

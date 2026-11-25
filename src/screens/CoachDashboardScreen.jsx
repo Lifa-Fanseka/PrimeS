@@ -17,13 +17,15 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Image as ExpoImage } from 'expo-image';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import VideoPlayer from '../components/VideoPlayer';
 import LoadingScreen from '../components/LoadingScreen';
 import api from '../api/client';
+import { addMessageListener } from '../api/chat';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 // Cloudinary generates a real video-frame thumbnail automatically
@@ -220,6 +222,7 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
   const [newTeamNameError, setNewTeamNameError] = useState('');
   const [teamSubmitting, setTeamSubmitting] = useState(false);
   const [deletingTeam, setDeletingTeam] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState(0);
   const goTo = (screen, params) => navigation.navigate(screen, params);
   const openModal = modal => setActiveModal(modal);
   const closeModal = () => setActiveModal(null);
@@ -246,6 +249,13 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
       }
 
       try {
+        const convosRes = await api.get('/api/Message/conversations');
+        setUnreadMessages(convosRes.data.reduce((sum, c) => sum + (c.unreadCount || 0), 0));
+      } catch (err) {
+        console.error('Failed to load conversations:', err);
+      }
+
+      try {
         const competitionsRes = await api.get('/api/Competition');
         setAvailableCompetitions(competitionsRes.data);
       } catch (err) {
@@ -262,6 +272,42 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  // Re-check on every return to this screen — e.g. coming back from the
+  // Messages screen after reading a thread, so the badge count stays
+  // accurate without needing a manual pull-to-refresh.
+  useFocusEffect(
+    useCallback(() => {
+      loadAll();
+    }, [loadAll])
+  );
+
+  // Live unread-messages badge: bump the moment a message arrives over
+  // the existing chat socket (see ../api/chat), so it shows up instantly
+  // even while sitting on this dashboard. The true count re-syncs from
+  // the server whenever this screen loads/refocuses (see loadAll above).
+  useEffect(() => {
+    let mounted = true;
+    let removeListener = () => {};
+
+    (async () => {
+      const idStr = await AsyncStorage.getItem('userId');
+      const myUserId = idStr ? parseInt(idStr, 10) : null;
+      if (!mounted) return;
+
+      removeListener = addMessageListener((dto) => {
+        if (dto.senderId !== myUserId) {
+          setUnreadMessages((prev) => prev + 1);
+        }
+      });
+    })();
+
+    return () => {
+      mounted = false;
+      removeListener();
+    };
+  }, []);
+
   const onRefresh = () => {
     setRefreshing(true);
     loadAll();
@@ -595,6 +641,11 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
           </TouchableOpacity>
           <TouchableOpacity style={styles.iconBtn} onPress={() => handleTabPress('messages')} activeOpacity={0.7}>
             <Ionicons name="chatbubble-ellipses-outline" size={22} color="#374151" />
+            {unreadMessages > 0 && (
+              <View style={styles.msgBadge}>
+                <Text style={styles.msgBadgeText}>{unreadMessages > 9 ? '9+' : unreadMessages}</Text>
+              </View>
+            )}
           </TouchableOpacity>
           <TouchableOpacity style={styles.iconBtn} onPress={() => goTo('Settings')} activeOpacity={0.7}>
             <Ionicons name="settings-outline" size={22} color="#374151" />
@@ -704,6 +755,11 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
           <TouchableOpacity key={item.tab} style={styles.navTab} onPress={() => handleTabPress(item.tab)} activeOpacity={0.7}>
             <View>
               <Ionicons name={activeTab === item.tab ? item.activeIcon : item.icon} size={24} color={activeTab === item.tab ? '#06B6D4' : '#6B7280'} />
+              {item.tab === 'messages' && unreadMessages > 0 && (
+                <View style={styles.msgBadge}>
+                  <Text style={styles.msgBadgeText}>{unreadMessages > 9 ? '9+' : unreadMessages}</Text>
+                </View>
+              )}
             </View>
             <Text style={[styles.navLabel, activeTab === item.tab && styles.navLabelActive]}>{item.label}</Text>
           </TouchableOpacity>
@@ -906,7 +962,7 @@ export default function CoachDashboardScreen({ navigation: navProp }) {
                 error={newTeamNameError}
               />
 
-              <TouchableOpacity activeOpacity={0.85} onPress={handleCreateTeam} disabled={teamSubmitting}>
+              <TouchableOpacity style={styles.createTeamBtnWrap} activeOpacity={0.85} onPress={handleCreateTeam} disabled={teamSubmitting}>
                 <LinearGradient colors={['#06B6D4', '#3B82F6']} style={styles.createTeamBtn} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
                   {teamSubmitting ? (
                     <ActivityIndicator color="#ffffff" />
@@ -1255,6 +1311,23 @@ const styles = StyleSheet.create({
     height: responsive(8),
     borderRadius: responsive(4),
     backgroundColor: '#EF4444',
+  },
+  msgBadge: {
+    position: 'absolute',
+    top: responsive(-4),
+    right: responsive(-6),
+    minWidth: responsive(16),
+    height: responsive(16),
+    borderRadius: responsive(8),
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: responsive(3),
+  },
+  msgBadgeText: {
+    color: '#ffffff',
+    fontSize: responsive(9),
+    fontWeight: '800',
   },
   heroSection: {
     paddingHorizontal: responsive(16),
@@ -2022,6 +2095,10 @@ const styles = StyleSheet.create({
     marginBottom: responsive(24),
     paddingHorizontal: responsive(8),
   },
+  createTeamBtnWrap: {
+    width: '100%',
+    marginTop: responsive(4),
+  },
   createTeamBtn: {
     width: '100%',
     height: responsive(52),
@@ -2030,7 +2107,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: responsive(8),
-    marginTop: responsive(4),
   },
   createTeamBtnText: {
     color: '#ffffff',

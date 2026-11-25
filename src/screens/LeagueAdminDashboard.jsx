@@ -19,6 +19,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import api from '../api/client';
+import LoadingScreen from '../components/LoadingScreen';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -117,6 +118,10 @@ export default function LeagueAdminDashboard({ navigation: navProp }) {
   const [awayScoreInput, setAwayScoreInput] = useState('');
   const [savingResult, setSavingResult] = useState(false);
 
+  const [startDateModal, setStartDateModal] = useState(false);
+  const [startDateInput, setStartDateInput] = useState('');
+  const [savingStartDate, setSavingStartDate] = useState(false);
+
   const loadAll = useCallback(async () => {
     try {
       const [profileRes, competitionsRes] = await Promise.all([
@@ -208,9 +213,23 @@ export default function LeagueAdminDashboard({ navigation: navProp }) {
       Alert.alert('Not Enough Teams', 'At least 2 teams need to join before a schedule can be generated.');
       return;
     }
+
+    // The schedule generator spaces fixture dates out from the
+    // competition's start date (one round per week) instead of leaving
+    // every fixture as "Date TBC" — so it needs one set before it can run.
+    if (!selectedCompetition?.startDate) {
+      setStartDateInput('');
+      setStartDateModal(true);
+      return;
+    }
+
+    confirmAndGenerateSchedule();
+  };
+
+  const confirmAndGenerateSchedule = (competition = selectedCompetition) => {
     Alert.alert(
       'Generate Schedule',
-      `Generate a full round-robin schedule for ${joinedTeams.length} teams? This creates every fixture at once and can't be undone.`,
+      `Generate a full round-robin schedule for ${joinedTeams.length} teams, starting ${competition.startDate}? This creates every fixture at once (one round per week) and can't be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -218,11 +237,11 @@ export default function LeagueAdminDashboard({ navigation: navProp }) {
           onPress: async () => {
             setGeneratingSchedule(true);
             try {
-              const res = await api.post(`/api/LeagueAdmin/competitions/${selectedCompetition.competitionId}/generate-schedule`);
+              const res = await api.post(`/api/LeagueAdmin/competitions/${competition.competitionId}/generate-schedule`);
               setFixtures(res.data);
               setCompetitions((prev) =>
                 prev.map((c) =>
-                  c.competitionId === selectedCompetition.competitionId ? { ...c, scheduleGenerated: true } : c
+                  c.competitionId === competition.competitionId ? { ...c, scheduleGenerated: true } : c
                 )
               );
               setDetailTab('fixtures');
@@ -236,6 +255,34 @@ export default function LeagueAdminDashboard({ navigation: navProp }) {
         },
       ]
     );
+  };
+
+  const handleSetStartDate = async () => {
+    if (!startDateInput.trim()) {
+      Alert.alert('Start Date Required', 'Enter a start date in YYYY-MM-DD format.');
+      return;
+    }
+    setSavingStartDate(true);
+    try {
+      const res = await api.put(
+        `/api/LeagueAdmin/competitions/${selectedCompetition.competitionId}/start-date`,
+        { startDate: startDateInput.trim() }
+      );
+      setSelectedCompetition(res.data);
+      setCompetitions((prev) =>
+        prev.map((c) => (c.competitionId === res.data.competitionId ? res.data : c))
+      );
+      setStartDateModal(false);
+      // Now that a start date exists, continue straight into the
+      // generate-schedule confirmation the admin originally asked for.
+      // Pass res.data directly rather than relying on `selectedCompetition`,
+      // which won't reflect this update until the next render.
+      confirmAndGenerateSchedule(res.data);
+    } catch (err) {
+      Alert.alert('Error', err?.response?.data ?? 'Could not save the start date.');
+    } finally {
+      setSavingStartDate(false);
+    }
   };
 
   const openResultModal = (fixture) => {
@@ -285,11 +332,7 @@ export default function LeagueAdminDashboard({ navigation: navProp }) {
   };
 
   if (loading) {
-    return (
-      <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
-        <ActivityIndicator size="large" color="#06B6D4" />
-      </SafeAreaView>
-    );
+    return <LoadingScreen />;
   }
 
   return (
@@ -388,6 +431,36 @@ export default function LeagueAdminDashboard({ navigation: navProp }) {
           <FormField label="Venue / Location" value={compVenue} onChangeText={setCompVenue} placeholder="e.g. Soccer City, Johannesburg" />
           <TouchableOpacity style={[styles.submitBtn, creating && { opacity: 0.7 }]} onPress={handleCreateCompetition} disabled={creating}>
             {creating ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.submitBtnText}>Create Competition</Text>}
+          </TouchableOpacity>
+        </View>
+      </ModalShell>
+
+      <ModalShell
+        visible={startDateModal}
+        title="Set Start Date"
+        onClose={() => setStartDateModal(false)}
+      >
+        <View style={styles.modalBody}>
+          <Text style={{ color: '#6B7280', fontSize: responsive(13), marginBottom: responsive(12) }}>
+            The schedule generator spaces fixtures one round per week starting from this date, so every match gets
+            a real date instead of "Date TBC".
+          </Text>
+          <FormField
+            label="Start Date"
+            value={startDateInput}
+            onChangeText={setStartDateInput}
+            placeholder="YYYY-MM-DD, e.g. 2026-06-01"
+          />
+          <TouchableOpacity
+            style={[styles.submitBtn, savingStartDate && { opacity: 0.7 }]}
+            onPress={handleSetStartDate}
+            disabled={savingStartDate}
+          >
+            {savingStartDate ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Text style={styles.submitBtnText}>Save & Generate Schedule</Text>
+            )}
           </TouchableOpacity>
         </View>
       </ModalShell>
